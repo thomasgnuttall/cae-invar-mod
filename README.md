@@ -1,4 +1,5 @@
 
+FORKED AND MODIFIED FROM - https://github.com/SonyCSLParis/cae-invar
 
 ## Complex Autoencoder for Learning Invariant Signal Representations
 
