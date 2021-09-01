@@ -331,6 +331,8 @@ if __name__ == '__main__':
         data = get_cqts(files, cache_key='train', rebuild=args.rebuild or
                                                           args.refresh_cache,
                         use_nr_samples=args.block_size, sr=args.sr, args=args)
+
+
         nr_eval = len(data) // 5
         data_eval = data[-nr_eval:]
         data = data[:-nr_eval]
@@ -344,6 +346,7 @@ if __name__ == '__main__':
                                 emph_onset=args.emph_onset)
 
         in_size = args.n_bins * args.length_ngram
+
     elif args.data_type == 'mnist':
         in_size = 28 * 28
         data = load_pyc_bz("./data/mnist_rot.pyc.bz")
@@ -365,6 +368,8 @@ if __name__ == '__main__':
 
     if args.cuda:
         model.cuda()
+
+    #import ipdb; ipdb.set_trace()
 
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
     model_save_fn = os.path.join(out_dir, "model_complex_auto_"

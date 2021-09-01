@@ -46,11 +46,13 @@ import numpy as np
 import os
 import time
 from . import utils
+#from complex_auto.motives_extractor import utils
 from . import ismir
+#from complex_auto.motives_extractor import ismir
 import matplotlib.pyplot as plt
 
 
-def get_bpm(wav_file):
+def get_bpm(wav_file, default=153):
     """Gets the correct bpm based on the wav_file name. If the wav_file is not
     contained in the JKU dataset, raises error.
 
@@ -58,7 +60,8 @@ def get_bpm(wav_file):
     ----------
     wav_file : str
         Path to the wav file to obtain its bpm.
-
+    default: float 
+        If bpm does not exist in bpm_dict, replace with 
     Returns
     -------
     bpm : int
@@ -72,8 +75,10 @@ def get_bpm(wav_file):
                 }
     wav_file = os.path.basename(wav_file).split(".")[0]
     if wav_file not in bpm_dict.keys():
-        raise Exception("%s not in the JKU dataset, you need to input a BPM" %
+        print("%s not in the JKU dataset, you need to input a BPM" %
                         wav_file)
+        return default
+
     return bpm_dict[wav_file]
 
 

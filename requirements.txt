@@ -9,4 +9,5 @@ torch==1.0.0
 torchvision==0.2.1
 tqdm==4.32.2
 mir-eval==0.5
-pandas==0.22.0
+numba==0.48
+pandas
