@@ -176,7 +176,7 @@ def create_matrices(dir_results, files, step_size=1, mode='cosine'):
 
 def get_input_repr(file):
     if args.data_type == "cqt":
-        sr = 22050
+        sr = 44100
         print(f"Transforming to CQT: {file}, sample rate = {sr}")
         repr = to_cqt_repr(file, args.n_bins, args.bins_per_oct, args.fmin,
                           args.hop_length, use_nr_samples=-1, sr=sr,

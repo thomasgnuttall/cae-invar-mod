@@ -472,7 +472,7 @@ def read_csv(csv_file):
 def read_wav(wav_file):
     """Reads the wav file and downsamples to 11025 Hz."""
     assert os.path.isfile(wav_file), \
-        'ERROR: wivefile file %s does not exist' % wav_file
+        'ERROR: wavefile file %s does not exist' % wav_file
 
     x, fs = librosa.core.load(wav_file, sr=11025)
     # if len(x.shape) >= 2:

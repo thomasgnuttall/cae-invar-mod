@@ -67,19 +67,19 @@ def get_bpm(wav_file, default=153):
     bpm : int
         BPM of the piece, as described in the JKU dataset.
     """
-    bpm_dict = {"wtc2f20-poly" : 84,
-                "sonata01-3-poly" : 192,
-                "mazurka24-4-poly" : 138,
-                "silverswan-poly" : 54,
-                "sonata04-2-poly" : 120
-                }
-    wav_file = os.path.basename(wav_file).split(".")[0]
-    if wav_file not in bpm_dict.keys():
-        print("%s not in the JKU dataset, you need to input a BPM" %
-                        wav_file)
-        return default
+    #bpm_dict = {"wtc2f20-poly" : 84,
+    #            "sonata01-3-poly" : 192,
+    #            "mazurka24-4-poly" : 138,
+    #            "silverswan-poly" : 54,
+    #            "sonata04-2-poly" : 120
+    #            }
+    #wav_file = os.path.basename(wav_file).split(".")[0]
+    #if wav_file not in bpm_dict.keys():
+    #    print("%s not in the JKU dataset, you need to input a BPM" %
+    #                    wav_file)
+    #    return default
 
-    return bpm_dict[wav_file]
+    return 400 #bpm_dict[wav_file]
 
 
 def print_patterns(patterns, h):
@@ -185,7 +185,7 @@ def obtain_patterns(segments, max_diff):
     Parameters
     ----------
     segments : list
-        List of the repetitions found in the self-similarity matrix.
+        List of the repetitions found inlen9patt the self-similarity matrix.
     max_diff : float
         Maximum difference to decide whether we found a segment or not.
 

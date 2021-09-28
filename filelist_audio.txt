@@ -1,3 +1,3 @@
-./audio/koti_janmani.mp3
-./audio/brova_barama.mp3
-./audio/karunimpa_idi.mp3
+./audio/Akkarai Sisters at Arkay by Akkarai Sisters/Koti Janmani/Koti Janmani.multitrack-vocal.mp3
+./audio/Akkarai Sisters at Arkay by Akkarai Sisters/Shankari Shankuru/Shankari Shankuru.multitrack-vocal.mp3
+./audio/Salem Gayatri Venkatesan at Arkay by Salem Gayatri Venkatesan/Sharanu Janakana/Sharanu Janakana.multitrack-vocal.mp3

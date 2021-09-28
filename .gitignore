@@ -4,6 +4,8 @@
 notes.txt
 *.pyc
 *.pyc.bz
+pretrained_models/*
 .ipynb_checkpoints/*
 output/*
 .DS_Store
+credentials.py

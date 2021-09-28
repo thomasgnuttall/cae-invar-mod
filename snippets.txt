@@ -1,0 +1,23 @@
+docker tag ba23ae87f451 registry.sb.upf.edu/mtg/ca_no_audio
+
+docker login registry.sb.upf.edu -u tnuttall
+
+docker push registry.sb.upf.edu/mtg/ca_no_audio
+
+
+
+
+ssh tnuttall@hpc.s.upf.edu
+
+interactive -a intel -g 2
+
+module load socker
+
+socker run mtg/carnatic_autoencoder python train.py akkarai filelist_audio.txt config_cqt.ini && python convert.py akkarai filelist_audio.txt config_cqt.ini && python convert.py akkarai filelist_audio.txt config_cqt.ini --self-sim-matrix && python extract_motives.py akkarai -r 2 -th 0.01 -csv jku_csv_files.txt
+
+
+python train.py hpc filelist_audio.txt config_cqt.ini
+python convert.py hpc filelist_audio.txt config_cqt.ini
+python convert.py hpc filelist_audio.txt config_cqt.ini --self-sim-matrix
+python extract_motives.py hpc -r 2 -th 0.01 -csv jku_csv_files.txt
+
