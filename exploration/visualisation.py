@@ -130,7 +130,7 @@ def plot_pitch(
     pitch_masked_samp = pitch_masked[:s_len]
 
     times_samp = times_samp[:min(len(times_samp), len(pitch_masked_samp))]
-    pitch_masked_samp = times_samp[:min(len(times_samp), len(pitch_masked_samp))]
+    pitch_masked_samp = pitch_masked_samp[:min(len(times_samp), len(pitch_masked_samp))]
     plt.plot(times_samp, pitch_masked_samp, linewidth=0.7)
 
     if yticks_dict:
@@ -158,7 +158,7 @@ def plot_subsequence(sp, l, pitch, times, timestep, path=None, plot_kwargs={}):
     
     this_pitch = pitch[int(max(sp-l,0)):int(sp+2*l)]
     this_times = times[int(max(sp-l,0)):int(sp+2*l)]
-    this_mask = this_pitch==0
+    this_mask = this_pitch == 0
     
     fig, ax = plot_pitch(
         this_pitch, this_times, mask=this_mask,
@@ -174,10 +174,45 @@ def plot_subsequence(sp, l, pitch, times, timestep, path=None, plot_kwargs={}):
     min_y = ax.get_ylim()[0]
     rect = Rectangle((x_d[int(min(l,sp))], min_y), l*timestep, max_y-min_y, facecolor='lightgrey')
     ax.add_patch(rect)
-    #import ipdb; ipdb.set_trace()
+    
     ax.plot(x, y, linewidth=0.7, color='darkorange')
     ax.axvline(x=x_d[int(min(l,sp))], linestyle="dashed", color='black', linewidth=0.8)
 
+    if path:
+        plt.savefig(path, dpi=90)
+        plt.close('all')
+    else:
+        return plt
+
+
+
+def plot_subsequence_w_stability(sp, l, pitch, time, stable_mask, timestep, path=None, plot_kwargs={}):
+    this_pitch = pitch[int(max(sp-l,0)):int(sp+2*l)]
+    this_times = time[int(max(sp-l,0)):int(sp+2*l)]
+    this_stab = stable_mask[int(max(sp-l,0)):int(sp+2*l)]
+    this_mask = this_pitch == 0
+
+    fig, ax = plot_pitch(
+        this_pitch, this_times, mask=this_mask,
+        xlim=(min(this_times), max(this_times)), **plot_kwargs)
+
+    ax2 = ax.twinx()
+    ax2.plot(this_times, this_stab, 'g', linewidth=0.7, alpha=0.5, linestyle='--')
+
+    x_d = ax.lines[-1].get_xdata()
+    y_d = ax.lines[-1].get_ydata()
+
+    x = x_d[int(min(l,sp)):int(l+min(l,sp))]
+    y = y_d[int(min(l,sp)):int(l+min(l,sp))]
+
+    max_y = ax.get_ylim()[1]
+    min_y = ax.get_ylim()[0]
+    rect = Rectangle((x_d[int(min(l,sp))], min_y), l*timestep, max_y-min_y, facecolor='lightgrey')
+    ax.add_patch(rect)
+
+    ax.plot(x, y, linewidth=0.7, color='darkorange')
+    ax.axvline(x=x_d[int(min(l,sp))], linestyle="dashed", color='black', linewidth=0.8)
+    
     if path:
         plt.savefig(path, dpi=90)
         plt.close('all')
@@ -195,10 +230,11 @@ def plot_all_sequences(pitch, times, lengths, seq_list, direc, clear_dir=False, 
     for i, seqs in enumerate(seq_list):
         for si, s in enumerate(seqs):
             l = lengths[i][si]
+            l_sec = round(lengths[i][0]*timestep,1)
             t_sec = s*timestep
             str_pos = get_timestamp(t_sec)
             sp = int(s)
-            plot_path = os.path.join(direc, f'motif_{i}/{si}_time={str_pos}.png')
+            plot_path = os.path.join(direc, f'motif_{i}_len={l_sec}/{si}_time={str_pos}.png')
             create_if_not_exists(plot_path)
             plot_subsequence(
                 sp, l, pitch, times, timestep, path=plot_path, plot_kwargs=plot_kwargs

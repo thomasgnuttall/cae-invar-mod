@@ -16,8 +16,8 @@ module load socker
 socker run mtg/carnatic_autoencoder python train.py akkarai filelist_audio.txt config_cqt.ini && python convert.py akkarai filelist_audio.txt config_cqt.ini && python convert.py akkarai filelist_audio.txt config_cqt.ini --self-sim-matrix && python extract_motives.py akkarai -r 2 -th 0.01 -csv jku_csv_files.txt
 
 
-python train.py hpc filelist_audio.txt config_cqt.ini
-python convert.py hpc filelist_audio.txt config_cqt.ini
-python convert.py hpc filelist_audio.txt config_cqt.ini --self-sim-matrix
-python extract_motives.py hpc -r 2 -th 0.01 -csv jku_csv_files.txt
+python train.py all_vocal filelist_audio.txt config_cqt.ini
+python convert.py all_vocal filelist_audio.txt config_cqt.ini
+python convert.py all_vocal filelist_audio.txt config_cqt.ini --self-sim-matrix
+python extract_motives.py all_vocal -r 2 -th 0.01 -csv jku_csv_files.txt
 

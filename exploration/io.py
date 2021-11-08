@@ -218,8 +218,9 @@ def write_subsequences_group(y, sr, starts, lengths, timestep, output_dir):
 def write_all_sequence_audio(audio_path, all_seqs, all_lens, timestep, output_dir):
     y, sr = librosa.load(audio_path)
     for i, seq in enumerate(all_seqs):
-        out_dir = os.path.join(output_dir, f'motif_{i}/')
         lens = [l*timestep for l in all_lens[i]]
+        l_sec = round(lens[0], 1)
+        out_dir = os.path.join(output_dir, f'motif_{i}_len={l_sec}/')
         write_subsequences_group(y, sr, seq, lens, timestep, out_dir)
 
 

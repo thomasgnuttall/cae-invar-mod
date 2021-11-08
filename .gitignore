@@ -9,3 +9,6 @@ pretrained_models/*
 output/*
 .DS_Store
 credentials.py
+notes.txt
+get_concerts.py
+*.csv
