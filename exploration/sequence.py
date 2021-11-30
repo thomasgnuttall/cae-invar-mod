@@ -107,3 +107,49 @@ def get_stability_mask(raw_pitch, min_stability_length_secs, stability_hop_secs,
     stable_mask = add_center_to_mask(stable_mask)
 
     return stable_mask
+
+
+def convert_seqs_to_timestep(all_groups, cqt_window, sr, timestep):
+    lengths = []
+    starts = []
+    for group in all_groups:
+        this_l = []
+        this_s = []
+        for g in group:
+            l = g[1]-g[0]
+            s = g[0]
+            if l > 0:
+                this_l.append(l)
+                this_s.append(s)
+        lengths.append(this_l)
+        starts.append(this_s)
+
+    starts_sec = [[x*cqt_window/sr for x in p] for p in starts]
+    lengths_sec = [[x*cqt_window/sr for x in l] for l in lengths]
+
+    starts_seq = [[int(x/timestep) for x in p] for p in starts_sec]
+    lengths_seq = [[int(x/timestep) for x in l] for l in lengths_sec]
+
+    return starts_seq, lengths_seq
+
+
+def apply_exclusions(raw_pitch, starts_seq, lengths_seq, exclusion_functions, min_in_group):
+    for i in range(len(starts_seq)):
+        these_seq = starts_seq[i]
+        these_lens = lengths_seq[i]
+        for j in range(len(these_seq))[::-1]:
+            this_len = these_lens[j]
+            this_start = these_seq[j]
+            n_fails = 0
+            for func in exclusion_functions:
+                if func(raw_pitch[this_start:this_start+this_len]):
+                    n_fails += 1
+            if n_fails > 0:
+                these_seq.pop(j)
+                these_lens.pop(j)
+
+    # minimum number in group to be pattern group
+    starts_seq_exc = [seqs for seqs in starts_seq if len(seqs)>=min_in_group]
+    lengths_seq_exc = [seqs for seqs in lengths_seq if len(seqs)>=min_in_group]
+
+    return starts_seq_exc, lengths_seq_exc

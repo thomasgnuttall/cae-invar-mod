@@ -29,7 +29,7 @@ ml load NCCL/2.3.7-CUDA-9.0.176
 
 # Run script
 module load socker
-socker run mtg/carnatic_autoencoder python train.py akkarai filelist_audio.txt config_cqt.ini 
-socker run mtg/carnatic_autoencoder python convert.py akkarai filelist_audio.txt config_cqt.ini 
-socker run mtg/carnatic_autoencoder python convert.py akkarai filelist_audio.txt config_cqt.ini --self-sim-matrix 
-socker run mtg/carnatic_autoencoder python extract_motives.py akkarai -r 2 -th 0.01 -csv jku_csv_files.txt
+socker run mtg/carnatic_autoencoder python train.py full_dataset filelist_full_dataset.txt config_cqt.ini 
+socker run mtg/carnatic_autoencoder python convert.py full_dataset filelist_full_dataset.txt config_cqt.ini 
+socker run mtg/carnatic_autoencoder python convert.py full_dataset filelist_full_dataset.txt config_cqt.ini --self-sim-matrix 
+socker run mtg/carnatic_autoencoder python extract_motives.py full_dataset -r 2 -th 0.01 -csv jku_csv_files.txt

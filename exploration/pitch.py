@@ -1,5 +1,15 @@
 import math
 import numpy as np
+import pandas as pd 
+
+import librosa
+
+from spleeter.separator import Separator
+from spleeter.audio.adapter import AudioAdapter
+
+import essentia.standard as estd
+
+from scipy.ndimage import gaussian_filter1d
 
 def pitch_to_cents(p, tonic):
     """
@@ -46,3 +56,70 @@ def pitch_seq_to_cents(pseq, tonic):
     """
     return np.vectorize(lambda y: pitch_to_cents(y, tonic))(pseq)
 
+
+def interpolate_below_length(arr, val, gap):
+    """
+    Interpolate gaps of value, <val> of 
+    length equal to or shorter than <gap> in <arr>
+    
+    :param arr: Array to interpolate
+    :type arr: np.array
+    :param val: Value expected in gaps to interpolate
+    :type val: number
+    :param gap: Maximum gap length to interpolate, gaps of <val> longer than <g> will not be interpolated
+    :type gap: number
+
+    :return: interpolated array
+    :rtype: np.array
+    """
+    s = np.copy(arr)
+    is_zero = s == val
+    cumsum = np.cumsum(is_zero).astype('float')
+    diff = np.zeros_like(s)
+    diff[~is_zero] = np.diff(cumsum[~is_zero], prepend=0)
+    for i,d in enumerate(diff):
+        if d <= gap:
+            s[int(i-d):i] = np.nan
+    interp = pd.Series(s).interpolate(method='linear', axis=0)\
+                         .ffill()\
+                         .bfill()\
+                         .values
+    return interp
+
+
+def extract_pitch_track(audio_path, frameSize, hopSize, gap_interp, smooth, sr):
+
+    audio_loaded, _ = librosa.load(audio_path, sr=sr)
+
+    # Run spleeter on track to remove the background
+    separator = Separator('spleeter:2stems')
+    audio_loader = AudioAdapter.default()
+    waveform, _ = audio_loader.load(audio_path, sample_rate=sr)
+    prediction = separator.separate(waveform=waveform)
+    clean_vocal = prediction['vocals']
+
+    # Prepare audio for pitch extraction
+    audio_mono = clean_vocal.sum(axis=1) / 2
+    audio_mono_eqloud = estd.EqualLoudness(sampleRate=sr)(audio_mono)
+
+    # Extract pitch using Melodia algorithm from Essentia
+    pitch_extractor = estd.PredominantPitchMelodia(frameSize=frameSize, hopSize=hopSize)
+    raw_pitch, _ = pitch_extractor(audio_mono_eqloud)
+    raw_pitch_ = np.append(raw_pitch, 0.0)
+    time = np.linspace(0.0, len(audio_mono_eqloud) / sr, len(raw_pitch))
+
+    timestep = time[4]-time[3] # resolution of time track
+
+    # Gap interpolation
+    if gap_interp:
+        print(f'Interpolating gaps of {gap_interp} or less')
+        raw_pitch = interpolate_below_length(raw_pitch_, 0, int(gap_interp/timestep))
+        
+    # Gaussian smoothing
+    if smooth:
+        print(f'Gaussian smoothing with sigma={smooth}')
+        pitch = gaussian_filter1d(raw_pitch, smooth)
+    else:
+        pitch = raw_pitch[:]
+
+    return pitch, raw_pitch, timestep, time

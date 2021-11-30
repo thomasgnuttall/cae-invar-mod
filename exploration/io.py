@@ -11,6 +11,18 @@ import soundfile as sf
 
 from exploration.utils import get_timestamp
 
+
+def prepro(X):
+    X = X - np.median(X)
+    return X
+
+
+def load_sim_matrix(path):
+    X = np.load(path)
+    X = prepro(X)
+    return X
+
+    
 def audio_loader(path, sampleRate=44100):
     """
     Load audio file from <path> to numpy array
