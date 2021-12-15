@@ -27,7 +27,25 @@ def get_extremes(angle, dist, l):
     return x0, y0, x1, y1
 
 
-def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr):
+def extend_segment(segment, max_l, padding):
+    """
+    segment: segment start and end indices [x0,x1]
+    max_l: maximum indice possible
+    padding: percentage to extend
+    """
+    x0 = segment[0]
+    x1 = segment[1]
+    length = x1-x0
+    ext = int(padding*length)
+    return [max([0,x0-ext]), min([max_l,x1+ext])]
+
+
+def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr, padding=None):
+    """
+    Extract start and end coordinates of non-zero elements along hough line defined
+    by <angle> and <dist>. If <padding>, extend length of each segment by <padding>%
+    along the line.
+    """
     # traverse hough lines and identify non-zero segments 
     l = matrix.shape[0]-1
 
@@ -45,6 +63,7 @@ def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr):
     # x and y indices corresponding to line
     x = x.astype(int)
     y = y.astype(int)
+    max_l = len(x)-1
 
     # Extract the values along the line
     zi = matrix[x, y]
@@ -82,6 +101,8 @@ def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr):
             this_segment = [non_zero[i]]
 
     this_segment.append(non_zero[-1])
+    if padding:
+        this_segment = extend_segment(this_segment, max_l, padding)
     segments.append(this_segment)
 
     all_segments = []
@@ -90,6 +111,37 @@ def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr):
         all_segments.append([(x[i1], y[i1]), (x[i2], y[i2])])
 
     return all_segments
+
+
+def extend_segments(X_conv, X_cont, peaks, min_diff_trav, cqt_window, sr, bin_thresh_segment, perc_tail):
+    """
+    The segments surfaced by the convolution have tails that fade to 0, we want the binarizing
+    threshold to be lower for these tails than the rest of the array
+    """
+    new_conv = X_cont.copy()
+    all_segments = []
+    for _, angle, dist in zip(*peaks):
+        segments = extract_segments(X_cont, angle, dist, min_diff_trav, cqt_window, sr, padding=perc_tail)
+
+        # If either of the lengths are above minimum length, add to all segments
+        for s in segments:
+            x0 = s[0][0]
+            y0 = s[0][1]
+            x1 = s[1][0]
+            y1 = s[1][1]
+
+            # Length of line to traverse
+            length = int(np.hypot(x1-x0, y1-y0))
+            x, y = np.linspace(x0, x1, length), np.linspace(y0, y1, length)
+
+            # x and y indices corresponding to line
+            x = x.astype(int)
+            y = y.astype(int)
+            
+            for X,Y in zip(x,y):
+                if X_conv[X,Y] >= bin_thresh_segment:
+                    new_conv[X,Y] = 1
+    return new_conv
 
 
 def get_all_segments(X, peaks, min_diff_trav, min_length_cqt, cqt_window, sr):
@@ -138,7 +190,7 @@ def get_all_segments(X, peaks, min_diff_trav, min_length_cqt, cqt_window, sr):
 #       length_change=l2-l1
 
 
-def break_segment(segment_pair, stable_mask, cqt_window, sr, timestep):
+def break_segment(segment_pair, mask, cqt_window, sr, timestep):
     
     # (x start, y start), (x end, y end)
     x_start = segment_pair[0][0]
@@ -153,10 +205,10 @@ def break_segment(segment_pair, stable_mask, cqt_window, sr, timestep):
     y_end = segment_pair[1][1]
     y_end_ts = int((y_end*cqt_window)/(sr*timestep))
 
-    stab_x = stable_mask[x_start_ts:x_end_ts]
-    stab_y = stable_mask[y_start_ts:y_end_ts]
+    stab_x = mask[x_start_ts:x_end_ts]
+    stab_y = mask[y_start_ts:y_end_ts]
 
-    # If either sequence contains a stable region, divide
+    # If either sequence contains a masked region, divide
     if any([2 in stab_x, 2 in stab_y]):
         break_points_x = np.where(stab_x==2)[0]
         break_points_y = np.where(stab_y==2)[0]
@@ -188,10 +240,10 @@ def break_segment(segment_pair, stable_mask, cqt_window, sr, timestep):
     return new_segments
 
 
-def break_all_segments(all_segments, stable_mask, cqt_window, sr, timestep):
+def break_all_segments(all_segments, mask, cqt_window, sr, timestep):
     all_broken_segments = []
     for segment_pair in all_segments:
-        broken = break_segment(segment_pair, stable_mask, cqt_window, sr, timestep)
+        broken = break_segment(segment_pair, mask, cqt_window, sr, timestep)
         if len(broken) > 0:
             all_broken_segments += broken
         else:
@@ -303,27 +355,48 @@ def get_length(x1,y1,x2,y2):
     return ((x2-x1)**2 + (y2-y1)**2)**0.5
 
 
-def remove_group_duplicates(group, eps):
-    start_length = sorted([(x1, x2-x1, i) for i, (x1,x2) in enumerate(group) if x2-x1>0])
+# def remove_group_duplicates(group, eps):
+#     start_length = sorted([(x1, x2-x1, i) for i, (x1,x2) in enumerate(group) if x2-x1>0])
 
-    if len(start_length) == 0:
-        return []
+#     if len(start_length) == 0:
+#         return []
 
-    clustering = DBSCAN(eps=eps, min_samples=1)\
-                .fit(np.array([d for d,l,i in start_length])\
-                .reshape(-1, 1))
+#     clustering = DBSCAN(eps=eps, min_samples=1)\
+#                 .fit(np.array([d for d,l,i in start_length])\
+#                 .reshape(-1, 1))
+#     
+#     with_cluster = list(zip(clustering.labels_, start_length))
+
+#     top_indices = []
+#     for g, data in groupby(with_cluster, key=itemgetter(0)):
+#         data = list(data)
+#         top_i = sorted(data, key=lambda y: -y[1][1])[0][1][2]
+#         top_indices.append(top_i)
+
+#     group_reduced = [x for i,x in enumerate(group) if i in top_indices]
+
+#     return [x for x in group_reduced if x]
+
+
+def remove_group_duplicates(group, perc_overlap):
     
-    with_cluster = list(zip(clustering.labels_, start_length))
+    group_sorted = sorted(group, key= lambda y: (y[1]-y[0]), reverse=True)
 
-    top_indices = []
-    for g, data in groupby(with_cluster, key=itemgetter(0)):
-        data = list(data)
-        top_i = sorted(data, key=lambda y: -y[1][1])[0][1][2]
-        top_indices.append(top_i)
-
-    group_reduced = [x for i,x in enumerate(group) if i in top_indices]
-
-    return [x for x in group_reduced if x]
+    new_group = []
+    skip_array = [0]*len(group_sorted)
+    for i,(x0,x1) in enumerate(group_sorted):
+        if skip_array[i]:
+            continue
+        for j,(y0,y1) in enumerate(group_sorted):
+            if skip_array[j] or i==j:
+                continue
+            overlap = do_patterns_overlap(x0, x1, y0, y1, perc_overlap=perc_overlap)
+            if overlap:
+                # skip j since it is shorter
+                skip_array[j] = 1
+        new_group.append((x0,x1))
+        skip_array[i] = 1
+    return new_group
 
 
 def get_longest(x0,x1,y0,y1):
@@ -363,9 +436,9 @@ def group_segments(all_segments, perc_overlap):
         # any others correspond to the same two patterns...
         for j in range(len(all_seg_copy)):
 
-            # traverse half of symmetrical array
-            if i >= j:
-                continue
+            ## traverse half of symmetrical array
+            #if i >= j:
+            #    continue
 
             seg = all_seg_copy[j]
 
@@ -400,8 +473,30 @@ def group_segments(all_segments, perc_overlap):
 
         all_groups.append(this_group)
 
-    rgd = [remove_group_duplicates(g, eps=5) for g in all_groups]
+    rgd = [remove_group_duplicates(g, perc_overlap) for g in all_groups]
     return rgd
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -456,171 +551,22 @@ def group_segments(all_segments, perc_overlap):
 
 
 
-sample = all_segments_reduced
+#           sample = all_segments_reduced
 
-starts_seq_exc = [[test[0][0], test[0][1]] for test in sample]
-lengths_seq_exc = [[test[1][0]-test[0][0], test[1][1]-test[0][1]] for test in sample]
+#           starts_seq_exc = [[test[0][0], test[0][1]] for test in sample]
+#           lengths_seq_exc = [[test[1][0]-test[0][0], test[1][1]-test[0][1]] for test in sample]
 
-starts_sec_exc = [[(x*cqt_window)/(sr) for x in y] for y in starts_seq_exc]
-lengths_sec_exc = [[(x*cqt_window)/(sr) for x in y] for y in lengths_seq_exc]
+#           starts_sec_exc = [[(x*cqt_window)/(sr) for x in y] for y in starts_seq_exc]
+#           lengths_sec_exc = [[(x*cqt_window)/(sr) for x in y] for y in lengths_seq_exc]
 
-# Found segments broken from image processing
-X_segments = add_segments_to_plot(X_canvas, sample)
-skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments)
-
-
-# Patterns from full pipeline
-X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr, cqt_window)
-skimage.io.imsave('images/patterns_sim_mat.png', X_patterns)
+#           # Found segments broken from image processing
+#           X_segments = add_segments_to_plot(X_canvas, sample)
+#           skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments)
 
 
-
-
-
-
-
-
-segment_indices = []
-same_seqs_thresh_secs = 0.5
-same_seqs_thresh = int(same_seqs_thresh_secs*sr/cqt_window)
-perc_overlap = 0.8
-
-all_seg_copy = all_segments_reduced.copy()
-
-seg_length = lambda y: np.hypot(y[1][0]-y[0][0], y[1][1]-y[0][1])
-all_seg_copy = sorted(all_seg_copy, key=seg_length, reverse=True)
-
-all_groups = []
-skip_array = [0]*len(all_seg_copy)
-for i in range(len(all_seg_copy)):
-    # If this segment has been grouped already, do not consider
-    if skip_array[i] == 1:
-        continue
-    
-    # To avoid altering original segments array
-    query_seg = all_seg_copy[i]
-
-    x0 = query_seg[0][0]
-    y0 = query_seg[0][1]
-    x1 = query_seg[1][0]
-    y1 = query_seg[1][1]
-
-    # get both corresponding patterns from query
-    this_group = [(x0,x1), (y0,y1)]
-    this_index_group = [i,i]
-    # Iterate through all other segments to identify whether
-    # any others correspond to the same two patterns...
-    for j in range(len(all_seg_copy)):
-
-        # traverse half of symmetrical array
-        if i >= j:
-            continue
-
-        seg = all_seg_copy[j]
-
-        # all segments correspond to two new patterns maximum...
-        x_0 = seg[0][0]
-        y_0 = seg[0][1]
-        x_1 = seg[1][0]
-        y_1 = seg[1][1]
-
-        #x_match = same_seqs_marriage(x0, x1, x_0, x_1, thresh=same_seqs_thresh)
-        #y_match = same_seqs_marriage(y0, y1, y_0, y_1, thresh=same_seqs_thresh)
-
-        xx_match = do_patterns_overlap(x0, x1, x_0, x_1, perc_overlap=perc_overlap)
-        yy_match = do_patterns_overlap(y0, y1, y_0, y_1, perc_overlap=perc_overlap)
-        xy_match = do_patterns_overlap(x0, x1, y_0, y_1, perc_overlap=perc_overlap)
-        yx_match = do_patterns_overlap(y0, y1, x_0, x_1, perc_overlap=perc_overlap)
-
-        if (xx_match and yy_match) or (xy_match and yx_match):
-            # same pattern, do not add and skip
-            skip_array[j] = 1
-
-        elif (xx_match and not yy_match) or (yx_match and not xy_match):
-            # dont append the one that matches (since we already have it)
-            if (y_0, y_1) not in this_group:
-                this_group += [(y_0, y_1)]
-                this_index_group += [j]
-            skip_array[j] = 1
-
-        elif (yy_match and not xx_match) or (xy_match and not yx_match):
-            # dont append the one that matches (since we already have it)
-            if (x_0, x_1) not in this_group:
-                this_group += [(x_0, x_1)]
-                this_index_group += [j]
-            skip_array[j] = 1
-
-    all_groups.append(this_group)
-    segment_indices.append(this_index_group)
-
-
-print('Convert sequences to pitch track timesteps')
-starts_seq, lengths_seq = convert_seqs_to_timestep(all_groups, cqt_window, sr, timestep)
-
-print('Applying exclusion functions')
-#starts_seq_exc, lengths_seq_exc = apply_exclusions(raw_pitch, starts_seq, lengths_seq, exclusion_functions, min_in_group)
-starts_seq_exc,  lengths_seq_exc = remove_below_length(starts_seq, lengths_seq, timestep, min_pattern_length_seconds)
-
-starts_sec_exc = [[x*timestep for x in p] for p in starts_seq_exc]
-lengths_sec_exc = [[x*timestep for x in l] for l in lengths_seq_exc]
-
-print('Evaluating')
-annotations_orig = load_annotations_new(annotations_path)
-metrics = evaluate_all_tiers(annotations_orig, starts_sec_exc, lengths_sec_exc, eval_tol)
-
-
-print('Writing all sequences')
-plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_hough', clear_dir=True, plot_kwargs=plot_kwargs)
-write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_hough')
-
-
-
-
-
-# plot one group
-i=0
-j=2
-if j:
-    sse = [starts_sec_exc[i], starts_sec_exc[j]]
-    lse = [lengths_sec_exc[i], lengths_sec_exc[j]]
-    indices1 = segment_indices[i]
-    indices2 = segment_indices[j]
-else:
-    sse = [starts_sec_exc[i]]
-    lse = [lengths_sec_exc[i]]
-    indices1 = segment_indices[i]
-    indices2 = None
-
-X_patterns = add_patterns_to_plot(X_canvas, sse, lse, sr, cqt_window)
-skimage.io.imsave('images/patterns_sim_mat.png', X_patterns)
-print(indices1)
-print(indices2)
-
-
-
-
-
-segmentj = all_segments_reduced[0]
-segmenti = all_segments_reduced[4]
-
-x0 = segmenti[0][0]
-y0 = segmenti[0][1]
-x1 = segmenti[1][0]
-y1 = segmenti[1][1]
-
-x_0 = segmentj[0][0]
-y_0 = segmentj[0][1]
-x_1 = segmentj[1][0]
-y_1 = segmentj[1][1]
-
-xx_match = do_patterns_overlap(x0, x1, x_0, x_1, perc_overlap=0.7)
-yy_match = do_patterns_overlap(y0, y1, y_0, y_1, perc_overlap=0.7)
-xy_match = do_patterns_overlap(x0, x1, y_0, y_1, perc_overlap=0.7)
-yx_match = do_patterns_overlap(y0, y1, x_0, x_1, perc_overlap=0.7)
-
-# Found segments broken from image processing
-X_segments = add_segments_to_plot(X_canvas, [segmenti, segmentj])
-skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments)
+#           # Patterns from full pipeline
+#           X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr, cqt_window)
+#           skimage.io.imsave('images/patterns_sim_mat.png', X_patterns)
 
 
 
@@ -628,12 +574,161 @@ skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments)
 
 
 
-# do_patterns_overlap
-p0_indices = set(range(x0, x1+1))
-p1_indices = set(range(y_0, y_1+1))
 
-o1 = len(p1_indices.intersection(p0_indices))/len(p0_indices)>perc_overlap
-o2 = len(p1_indices.intersection(p0_indices))/len(p1_indices)>perc_overlap
+#           segment_indices = []
+#           same_seqs_thresh_secs = 0.5
+#           same_seqs_thresh = int(same_seqs_thresh_secs*sr/cqt_window)
+#           perc_overlap = 0.8
+
+#           all_seg_copy = all_segments_reduced.copy()
+
+#           seg_length = lambda y: np.hypot(y[1][0]-y[0][0], y[1][1]-y[0][1])
+#           all_seg_copy = sorted(all_seg_copy, key=seg_length, reverse=True)
+
+#           all_groups = []
+#           skip_array = [0]*len(all_seg_copy)
+#           for i in range(len(all_seg_copy)):
+#               # If this segment has been grouped already, do not consider
+#               if skip_array[i] == 1:
+#                   continue
+#               
+#               # To avoid altering original segments array
+#               query_seg = all_seg_copy[i]
+
+#               x0 = query_seg[0][0]
+#               y0 = query_seg[0][1]
+#               x1 = query_seg[1][0]
+#               y1 = query_seg[1][1]
+
+#               # get both corresponding patterns from query
+#               this_group = [(x0,x1), (y0,y1)]
+#               this_index_group = [i,i]
+#               # Iterate through all other segments to identify whether
+#               # any others correspond to the same two patterns...
+#               for j in range(len(all_seg_copy)):
+
+#                   # traverse half of symmetrical array
+#                   #if i >= j:
+#                   #    continue
+
+#                   seg = all_seg_copy[j]
+
+#                   # all segments correspond to two new patterns maximum...
+#                   x_0 = seg[0][0]
+#                   y_0 = seg[0][1]
+#                   x_1 = seg[1][0]
+#                   y_1 = seg[1][1]
+
+#                   #x_match = same_seqs_marriage(x0, x1, x_0, x_1, thresh=same_seqs_thresh)
+#                   #y_match = same_seqs_marriage(y0, y1, y_0, y_1, thresh=same_seqs_thresh)
+
+#                   xx_match = do_patterns_overlap(x0, x1, x_0, x_1, perc_overlap=perc_overlap)
+#                   yy_match = do_patterns_overlap(y0, y1, y_0, y_1, perc_overlap=perc_overlap)
+#                   xy_match = do_patterns_overlap(x0, x1, y_0, y_1, perc_overlap=perc_overlap)
+#                   yx_match = do_patterns_overlap(y0, y1, x_0, x_1, perc_overlap=perc_overlap)
+
+#                   if (xx_match and yy_match) or (xy_match and yx_match):
+#                       # same pattern, do not add and skip
+#                       skip_array[j] = 1
+
+#                   elif (xx_match and not yy_match) or (yx_match and not xy_match):
+#                       # dont append the one that matches (since we already have it)
+#                       if (y_0, y_1) not in this_group:
+#                           this_group += [(y_0, y_1)]
+#                           this_index_group += [j]
+#                       skip_array[j] = 1
+
+#                   elif (yy_match and not xx_match) or (xy_match and not yx_match):
+#                       # dont append the one that matches (since we already have it)
+#                       if (x_0, x_1) not in this_group:
+#                           this_group += [(x_0, x_1)]
+#                           this_index_group += [j]
+#                       skip_array[j] = 1
+
+#               all_groups.append(this_group)
+#               segment_indices.append(this_index_group)
+
+
+#           print('Convert sequences to pitch track timesteps')
+#           starts_seq, lengths_seq = convert_seqs_to_timestep(all_groups, cqt_window, sr, timestep)
+
+#           print('Applying exclusion functions')
+#           #starts_seq_exc, lengths_seq_exc = apply_exclusions(raw_pitch, starts_seq, lengths_seq, exclusion_functions, min_in_group)
+#           starts_seq_exc,  lengths_seq_exc = remove_below_length(starts_seq, lengths_seq, timestep, min_pattern_length_seconds)
+
+#           starts_sec_exc = [[x*timestep for x in p] for p in starts_seq_exc]
+#           lengths_sec_exc = [[x*timestep for x in l] for l in lengths_seq_exc]
+
+#           print('Evaluating')
+#           annotations_orig = load_annotations_new(annotations_path)
+#           metrics = evaluate_all_tiers(annotations_orig, starts_sec_exc, lengths_sec_exc, eval_tol)
+
+
+#           print('Writing all sequences')
+#           plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_hough', clear_dir=True, plot_kwargs=plot_kwargs)
+#           write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_hough')
+
+
+
+
+
+#           # plot one group
+#           i=0
+#           j=2
+#           if j:
+#               sse = [starts_sec_exc[i], starts_sec_exc[j]]
+#               lse = [lengths_sec_exc[i], lengths_sec_exc[j]]
+#               indices1 = segment_indices[i]
+#               indices2 = segment_indices[j]
+#           else:
+#               sse = [starts_sec_exc[i]]
+#               lse = [lengths_sec_exc[i]]
+#               indices1 = segment_indices[i]
+#               indices2 = None
+
+#           X_patterns = add_patterns_to_plot(X_canvas, sse, lse, sr, cqt_window)
+#           skimage.io.imsave('images/patterns_sim_mat.png', X_patterns)
+#           print(indices1)
+#           print(indices2)
+
+
+
+
+
+#           segmentj = all_segments_reduced[0]
+#           segmenti = all_segments_reduced[4]
+
+#           x0 = segmenti[0][0]
+#           y0 = segmenti[0][1]
+#           x1 = segmenti[1][0]
+#           y1 = segmenti[1][1]
+
+#           x_0 = segmentj[0][0]
+#           y_0 = segmentj[0][1]
+#           x_1 = segmentj[1][0]
+#           y_1 = segmentj[1][1]
+
+#           xx_match = do_patterns_overlap(x0, x1, x_0, x_1, perc_overlap=0.7)
+#           yy_match = do_patterns_overlap(y0, y1, y_0, y_1, perc_overlap=0.7)
+#           xy_match = do_patterns_overlap(x0, x1, y_0, y_1, perc_overlap=0.7)
+#           yx_match = do_patterns_overlap(y0, y1, x_0, x_1, perc_overlap=0.7)
+
+#           # Found segments broken from image processing
+#           X_segments = add_segments_to_plot(X_canvas, [segmenti, segmentj])
+#           skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments)
+
+
+
+
+
+
+
+#           # do_patterns_overlap
+#           p0_indices = set(range(x0, x1+1))
+#           p1_indices = set(range(y_0, y_1+1))
+
+#           o1 = len(p1_indices.intersection(p0_indices))/len(p0_indices)>perc_overlap
+#           o2 = len(p1_indices.intersection(p0_indices))/len(p1_indices)>perc_overlap
 
 
 

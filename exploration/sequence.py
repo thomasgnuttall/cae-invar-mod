@@ -54,6 +54,7 @@ def is_stable(seq, max_var):
     else:
         return 0
 
+
 def reduce_stability_mask(stable_mask, min_stability_length_secs, timestep):
     min_stability_length = int(min_stability_length_secs/timestep)
     num_one = 0
@@ -71,21 +72,21 @@ def reduce_stability_mask(stable_mask, min_stability_length_secs, timestep):
     return stable_mask
 
 
-def add_center_to_mask(stable_mask):
+def add_center_to_mask(mask):
     num_one = 0
     indices = []
-    for i,s in enumerate(stable_mask):
+    for i,s in enumerate(mask):
         if s == 1:
             num_one += 1
             indices.append(i)
         else:
             li = len(indices)
             if li:
-                middle = indices[int(len(indices)/2)]
-                stable_mask[middle] = 2
+                middle = indices[int(li/2)]
+                mask[middle] = 2
                 num_one = 0
                 indices = []
-    return stable_mask
+    return mask
 
 
 def get_stability_mask(raw_pitch, min_stability_length_secs, stability_hop_secs, var_thresh, timestep):

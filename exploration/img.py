@@ -19,11 +19,23 @@ scharr = np.array([[ -3-3j, 0-10j,  +3 -3j],
                    [-10+0j, 0+ 0j, +10 +0j],
                    [ -3+3j, 0+10j,  +3 +3j]]) # Gx + j*Gy
 
+sobel = np.asarray([[-1, 0, 1],
+                    [-2, 0, 2],
+                    [-1, 0, 1]])
+
+sobel_x = np.array([[-1, 0, 1],
+                    [-2, 0, 2],
+                    [-1, 0, 1]], dtype=np.float)
+
+sobel_y = np.array([[1,  2, 1], 
+                    [0,  0, 0], 
+                    [-1,-2,-1]], dtype = np.float)
+
 def remove_diagonal(X):
     X_ = X.copy()
     n = X.shape[0]
 
-    for i in range(-15, 15):
+    for i in range(-30, 30):
         x = range(n)
         y = [x_ + i for x_ in x]
         
@@ -33,14 +45,22 @@ def remove_diagonal(X):
         X_[x,y] = 0
     return X_
 
-    
+
 def convolve_array(X, cfilter=scharr):
     grad = signal.convolve2d(X, cfilter, boundary='symm', mode='same')
     X_conv = np.absolute(grad)
     return X_conv
 
+    
+def convolve_array_sobel(X, cfilter=sobel):
+    grad_x = signal.convolve2d(X, sobel_x, boundary='symm', mode='same')
+    grad_y = signal.convolve2d(X, sobel_y, boundary='symm', mode='same')
+    grad = np.hypot(grad_x, grad_y)
+    X_conv = np.absolute(grad)
+    return X_conv
 
-def convolve_array_tile(X, cfilter=scharr, divisor=49):
+
+def convolve_array_tile(X, cfilter=sobel, divisor=49):
     """
     Iteratively convolve equal sized tiles in X, rejoining for fast convolution of the whole
     """

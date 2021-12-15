@@ -9,10 +9,10 @@ from complex_auto.motives_extractor import *
 from complex_auto.motives_extractor.extractor import *
 
 from exploration.pitch import extract_pitch_track
-from exploration.img import remove_diagonal, convolve_array_tile, binarize, diagonal_gaussian, hough_transform, hough_transform_new
-from exploration.segments import get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, remove_short, group_segments
+from exploration.img import remove_diagonal, convolve_array_tile, binarize, diagonal_gaussian, hough_transform, hough_transform_new, scharr, sobel
+from exploration.segments import get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, remove_short, group_segments, extend_segments
 from exploration.sequence import apply_exclusions, contains_silence, min_gap, too_stable, convert_seqs_to_timestep, get_stability_mask, add_center_to_mask
-from exploration.evaluation import load_annotations_new, evaluate_all_tiers
+from exploration.evaluation import load_annotations_new, evaluate_all_tiers, evaluation_report, get_coverage
 from exploration.visualisation import plot_all_sequences, plot_pitch
 from exploration.io import load_sim_matrix, write_all_sequence_audio, load_yaml
 from exploration.pitch import cents_to_pitch, pitch_seq_to_cents, pitch_to_cents
@@ -41,7 +41,10 @@ def remove_below_length(starts_seq, lengths_seq, timestep, min_length):
 # Output paths of each step in pipeline
 out_dir = os.path.join("output", 'hpc')
 
-sim_path = 'output/hpc/Koti Janmani.multitrack-vocal.mp3.npy'
+sim_path = 'output/full_dataset/Koti Janmani.multitrack-vocal.mp3.npy'
+
+
+### Pitch Extraction
 
 # Sample rate of audio
 sr = 44100
@@ -50,8 +53,8 @@ sr = 44100
 cqt_window = 1984
 
 # Take sample of data, set to None to use all data
-s1 = None # lower bound index
-s2 = None # higher bound index
+s1 = None # lower bound index (5000 has been used for testing)
+s2 = None # higher bound index (9000 has been used for testing)
 
 # pitch track extraction
 frameSize = 2048 # For Melodia pitch extraction
@@ -66,11 +69,34 @@ stab_hop_secs = 0.2 # window size for stab computations in seconds
 min_stability_length_secs = 1.0 # minimum legnth of region to be considered stable in seconds
 freq_var_thresh_stab = 10 # max variation in pitch to be considered stable region
 
+print('Extracting pitch track')
+pitch, raw_pitch, timestep, time = extract_pitch_track(audio_path_vocal, frameSize, hopSize, gap_interp, smooth, sr)
+
+print('Computing stability/silence mask')
+stable_mask = get_stability_mask(raw_pitch, min_stability_length_secs, stab_hop_secs, freq_var_thresh_stab, timestep)
+silence_mask = (raw_pitch == 0).astype(int)
+silence_mask = add_center_to_mask(silence_mask)
+
+
+
+### Image Processing
+# convolutional filter
+conv_filter = sobel
+
 # Binarize raw sim array 0/1 below and above this value...
-bin_thresh = 0.6
+# depends completely on filter passed to convolutional step
+# Best...
+#   scharr, 0.56
+#   sobel unidrectional, 0.1
+#   sobel bidirectional, 0.15
+bin_thresh = 0.1
+# lower bin_thresh for areas surrounding segments
+bin_thresh_segment = 0.08
+# percentage either size of a segment considered for lower bin thresh
+perc_tail = 0.3
 
 # Gaussian filter along diagonals with sigma...
-gauss_sigma = 18
+gauss_sigma = None
 
 # After gaussian, re-binarize with this threshold
 cont_thresh = 0.15
@@ -88,12 +114,12 @@ min_diff_trav = 0.5
 
 # Two segments must overlap in both x and y by <dupl_perc_overlap> 
 # to be considered the same, only the longest is returned
-dupl_perc_overlap = 0.5
+dupl_perc_overlap = 0.75
 
 # Grouping diagonals
-min_pattern_length_seconds = 1
+min_pattern_length_seconds = 1.5
 min_length_cqt = min_pattern_length_seconds*sr/cqt_window
-min_in_group = 1 # minimum number of patterns to be included in pattern group
+min_in_group = 2 # minimum number of patterns to be included in pattern group
 
 # Minimum distance between start points (x,y) to be joined a segment group
 same_seqs_thresh_secs = 0.5
@@ -105,7 +131,7 @@ exclusion_functions = [contains_silence, min_gap]
 # Evaluation
 annotations_path = 'annotations/koti_janmani.txt'
 eval_tol = 0.5 # how much leniancy on each side of an annotated pattern before considering it a match (seconds)
-
+partial_perc = 0.3 # how much overlap does an annotated and identified pattern needed to be considered a partial match
 
 # Output
 svara_cent_path = "conf/svara_cents.yaml"
@@ -134,7 +160,7 @@ top_n = 1000
 ####################
 ## Load sim array ##
 ####################
-# Get similarity Martrix
+# Get similarity Matrix
 print(f'Loading sim matrix from {sim_path}')
 X = load_sim_matrix(sim_path)
 
@@ -146,14 +172,15 @@ else:
     save_imgs = False
     X_samp = X.copy()
 
-sim_filename = os.path.join(out_dir, 'Koti Janmani_simsave.png') if save_imgs else None
-gauss_filename = os.path.join(out_dir, 'Koti Janmani_gauss.png') if save_imgs else None
-edge_filename = os.path.join(out_dir, 'Koti Janmani_edges.png') if save_imgs else None
-bin_filename = os.path.join(out_dir, 'Koti Janmani_binary.png') if save_imgs else None
-cont_filename = os.path.join(out_dir, 'Koti Janmani_cont.png') if save_imgs else None
-hough_filename = os.path.join(out_dir, 'Koti Janmani_hough.png') if save_imgs else None
-conv_filename = os.path.join(out_dir, 'Koti Janmani_conv.png') if save_imgs else None
-diag_filename = os.path.join(out_dir, 'Koti Janmani_diag.png') if save_imgs else None
+sim_filename = os.path.join(out_dir, '1_Koti Janmani_simsave.png') if save_imgs else None
+conv_filename = os.path.join(out_dir, '2_Koti Janmani_conv.png') if save_imgs else None
+bin_filename = os.path.join(out_dir, '3_Koti Janmani_binary.png') if save_imgs else None
+diag_filename = os.path.join(out_dir, '4_Koti Janmani_diag.png') if save_imgs else None
+gauss_filename = os.path.join(out_dir, '5_Koti Janmani_gauss.png') if save_imgs else None
+cont_filename = os.path.join(out_dir, '6_Koti Janmani_cont.png') if save_imgs else None
+hough_filename = os.path.join(out_dir, '7_Koti Janmani_hough.png') if save_imgs else None
+cont_ext_filename = os.path.join(out_dir, '7_Koti Janmani_cont_ext.png') if save_imgs else None
+
 
 if save_imgs:
     skimage.io.imsave(sim_filename, X_samp)
@@ -161,59 +188,69 @@ if save_imgs:
 ##############
 ## Pipeline ##
 ##############
-print('Extracting pitch track')
-pitch, raw_pitch, timestep, time = extract_pitch_track(audio_path_vocal, frameSize, hopSize, gap_interp, smooth, sr)
-
-print('Computing stability/silence mask')
-stable_mask = get_stability_mask(raw_pitch, min_stability_length_secs, stab_hop_secs, freq_var_thresh_stab, timestep)
-silence_mask = raw_pitch == 0
-silence_mask = add_center_to_mask(silence_mask)
-
 print('Convolving similarity matrix')
-X_conv = convolve_array_tile(X_samp)
+X_conv = convolve_array_tile(X_samp, cfilter=conv_filter)
 
 if save_imgs:
     skimage.io.imsave(conv_filename, X_conv)
 
 print('Binarizing convolved array')
 X_bin = binarize(X_conv, bin_thresh, filename=bin_filename)
+#X_bin = binarize(X_conv, 0.05, filename=bin_filename)
 
-print('Removing Diagonal')
+print('Removing diagonal')
 X_diag = remove_diagonal(X_bin)
 
 if save_imgs:
     skimage.io.imsave(diag_filename, X_diag)
 
-print('Applying diagonal gaussian filter')
-X_gauss = X_diag #diagonal_gaussian(X_bin, gauss_sigma, filename=gauss_filename)
+if gauss_sigma:
+    print('Applying diagonal gaussian filter')
+    diagonal_gaussian(X_bin, gauss_sigma, filename=gauss_filename)
 
-print('Binarize gaussian blurred similarity matrix')
-X_cont = X_gauss #binarize(X_gauss, cont_thresh, filename=cont_filename)
+    print('Binarize gaussian blurred similarity matrix')
+    binarize(X_gauss, cont_thresh, filename=cont_filename)
+else:
+    X_gauss = X_diag
+    X_cont = X_gauss
 
 print('Applying Hough Transform')
 peaks = hough_transform_new(X_cont, hough_high_angle, hough_low_angle, hough_threshold, filename=hough_filename)
 
+print(f'Extending segments in convolved array along Hough Lines with lower threshold of {bin_thresh_segment}, (previously {bin_thresh})')
+X_cont_ext = extend_segments(X_conv, X_cont, peaks, min_diff_trav, cqt_window, sr, bin_thresh_segment, perc_tail)
+
+if save_imgs:
+    skimage.io.imsave(cont_ext_filename, X_cont_ext)
+
 print('Extracting segments along Hough lines')
 # Format - [[(x,y), (x1,y1)],...]
-all_segments = get_all_segments(X_cont, peaks, min_diff_trav, min_length_cqt, cqt_window, sr)
+all_segments = get_all_segments(X_cont_ext, peaks, min_diff_trav, min_length_cqt, cqt_window, sr)
+print(f'    {len(all_segments)} found...')
 
 print('Breaking segments with stable regions')
 # Format - [[(x,y), (x1,y1)],...]
 all_broken_segments = break_all_segments(all_segments, stable_mask, cqt_window, sr, timestep)
+print(f'    {len(all_broken_segments)} broken segments...')
 
 print('Breaking segments with silent regions')
 # Format - [[(x,y), (x1,y1)],...]
 all_broken_segments = break_all_segments(all_broken_segments, silence_mask, cqt_window, sr, timestep)
+print(f'    {len(all_broken_segments)} broken segments...')
 
 print('Reducing Segments')
 # The Hough transform allows for the same segment to be intersected
 # twice by lines of slightly different angle. We want to take the 
 # longest of these duplicates and discard the rest
 all_segments_reduced = reduce_duplicates(all_broken_segments, perc_overlap=dupl_perc_overlap)
+print(f'    {len(all_segments_reduced)} unique segments...')
+
 all_segments_reduced = remove_short(all_segments_reduced, min_length_cqt)
+print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pattern_length_seconds}s...')
 
 print('Grouping Segments')
 all_groups = group_segments(all_segments_reduced, perc_overlap=dupl_perc_overlap)
+print(f'    {len(all_groups)} groups found...')
 
 print('Convert sequences to pitch track timesteps')
 starts_seq, lengths_seq = convert_seqs_to_timestep(all_groups, cqt_window, sr, timestep)
@@ -227,7 +264,46 @@ lengths_sec_exc = [[x*timestep for x in l] for l in lengths_seq_exc]
 
 print('Evaluating')
 annotations_orig = load_annotations_new(annotations_path)
-metrics = evaluate_all_tiers(annotations_orig, starts_sec_exc, lengths_sec_exc, eval_tol)
+if s1:
+    annotations_filt = annotations_orig[(annotations_orig['s1']>=s1*cqt_window/sr) & (annotations_orig['s1']<=s2*cqt_window/sr)]
+    annotations_filt['s1'] = annotations_filt['s1']-s1*cqt_window/sr
+    annotations_filt['s2'] = annotations_filt['s2']-s1*cqt_window/sr
+else:
+    annotations_filt = annotations_orig
+
+metrics, annotations_tag = evaluate_all_tiers(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc)
+print('')
+coverage = get_coverage(pitch, starts_seq_exc, lengths_seq_exc)
+print(f'Coverage: {coverage}')
+evaluation_report(metrics)
+
+
+############
+## Output ##
+############
+print('Writing all sequences')
+plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_hough', clear_dir=True, plot_kwargs=plot_kwargs)
+write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_hough')
+
+
+
+
+
+# all_recalls =[]
+# partial_percs = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
+# for p in partial_percs:
+#     metrics, annotations_tag = evaluate_all_tiers(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=p)
+#     all_recalls.append(metrics['partial_match_recall_all'])
+
+
+# plt.figure(figsize=(10,5))
+# plt.plot(partial_percs, all_recalls)
+# plt.xlabel('Partial precision overlap')
+# plt.ylabel('Partial recall')
+# plt.grid()
+# plt.savefig('images/recall_against_partial_perc.png')
+# plt.close('all')
+
 
 # all_recalls = []
 # all_evals = [0.05*i for i in range(int(10/0.05))]
@@ -243,14 +319,6 @@ metrics = evaluate_all_tiers(annotations_orig, starts_sec_exc, lengths_sec_exc, 
 # plt.grid()
 # plt.savefig('images/eval_tol_experiment.png')
 # plt.close('all')
-
-
-############
-## Output ##
-############
-print('Writing all sequences')
-plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_hough', clear_dir=True, plot_kwargs=plot_kwargs)
-write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_hough')
 
 
 
@@ -355,10 +423,9 @@ X_segments_samp = X_segments.copy()[samp1:samp2,samp1:samp2]
 skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments_samp)
 
 # Patterns from full pipeline
-X_patterns = add_patterns_to_plot(X_canvas, [starts_sec_exc[0]], [lengths_sec_exc[0]], sr, cqt_window)
+X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr, cqt_window)
 X_patterns_samp = X_patterns.copy()[samp1:samp2,samp1:samp2]
 skimage.io.imsave('images/patterns_sim_mat.png', X_patterns_samp)
-
 
 
 
