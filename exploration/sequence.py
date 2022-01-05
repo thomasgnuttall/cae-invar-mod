@@ -154,3 +154,20 @@ def apply_exclusions(raw_pitch, starts_seq, lengths_seq, exclusion_functions, mi
     lengths_seq_exc = [seqs for seqs in lengths_seq if len(seqs)>=min_in_group]
 
     return starts_seq_exc, lengths_seq_exc
+
+
+def remove_below_length(starts_seq, lengths_seq, timestep, min_length):
+    starts_seq_long = []
+    lengths_seq_long = []
+    for i, group in enumerate(lengths_seq):
+        this_group_l = []
+        this_group_s = []
+        for j,l in enumerate(group):
+            if l >= min_length/timestep:
+                this_group_l.append(l)
+                this_group_s.append(starts_seq[i][j])
+        if this_group_s:
+            starts_seq_long.append(this_group_s)
+            lengths_seq_long.append(this_group_l)
+
+    return starts_seq_long, lengths_seq_long

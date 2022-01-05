@@ -1,5 +1,6 @@
 import numpy as np
 
+import skimage.io
 from sklearn.cluster import DBSCAN
 from itertools import groupby
 from operator import itemgetter
@@ -40,6 +41,28 @@ def extend_segment(segment, max_l, padding):
     return [max([0,x0-ext]), min([max_l,x1+ext])]
 
 
+def get_indices_of_line(l, angle, dist):
+    """
+    Return indices in square matrix of <l>x<l> for Hough line defined by <angle> and <dist> 
+    """ 
+    # Get start and end points of line to traverse from angle and dist
+    x0, y0, x1, y1 = get_extremes(angle, dist, l)
+
+    # To ensure no lines are defined outside the grid (should not be passed to func really)
+    if any([y1>l, x1>l, x0>l, y0>l, y1<0, x1<0, x0<0, y0<0]):
+        return None, None
+
+    # Length of line to traverse
+    length = int(np.hypot(x1-x0, y1-y0))
+    x, y = np.linspace(x0, x1, length), np.linspace(y0, y1, length)
+
+    # x and y indices corresponding to line
+    x = x.astype(int)
+    y = y.astype(int)
+
+    return x, y
+
+
 def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr, padding=None):
     """
     Extract start and end coordinates of non-zero elements along hough line defined
@@ -49,20 +72,12 @@ def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr, padding=None
     # traverse hough lines and identify non-zero segments 
     l = matrix.shape[0]-1
 
-    # Get start and end points of line to traverse from angle and dist
-    x0, y0, x1, y1 = get_extremes(angle, dist, l)
-
-    # To ensure no lines are defined outside the grid (should not be passed to func really)
-    if any([y1>l, x1>l, x0>l, y0>l, y1<0, x1<0, x0<0, y0<0]):
+    x, y = get_indices_of_line(l, angle, dist)
+    
+    # line defined outside of grid
+    if x is None:
         return []
 
-    # Length of line to traverse
-    length = int(np.hypot(x1-x0, y1-y0))
-    x, y = np.linspace(x0, x1, length), np.linspace(y0, y1, length)
-
-    # x and y indices corresponding to line
-    x = x.astype(int)
-    y = y.astype(int)
     max_l = len(x)-1
 
     # Extract the values along the line
@@ -170,6 +185,7 @@ def get_all_segments(X, peaks, min_diff_trav, min_length_cqt, cqt_window, sr):
     all_segments = sorted([sorted(x) for x in all_segments])
 
     return all_segments
+
 
 #   length_change = 1
 #   while length_change != 0:
@@ -476,6 +492,120 @@ def group_segments(all_segments, perc_overlap):
     rgd = [remove_group_duplicates(g, perc_overlap) for g in all_groups]
     return rgd
 
+
+
+def group_hough_lines(peaks, hough_line_proximity=5):
+    """
+    Due to the nature of the convolution, actual segments are annotated by high intensity regions around
+    their edges, resulting in one segment being represented by two edges, one on its uppermost and one on its 
+    lowermost side. This results in two extremely close hough lines. We want to identify these
+    lines and reduce them to one intersecting the region inbetween them (the locations of 
+    the true segment).
+    """
+    # ensure indices are correct and consecutive
+    peaks = (np.array(range(len(peaks[0]))), peaks[1], peaks[2])
+
+    # Sort lines by distance from origin
+    sp_ = np.array(sorted(zip(*peaks), key=lambda y: y[2]))
+
+    sp = [sp_[::,i] for i in range(3)]
+
+    groups = []
+    this_group = []
+    for i in range(len(sp_)):
+        dist = sp_[i][2]
+        if len(this_group)==0:
+            candidate = i
+            this_group.append(i)
+            continue
+        if abs(dist-sp_[candidate][2]) <= hough_line_proximity:
+            this_group.append(i)
+        else:
+            groups.append(this_group)
+            this_group = [i]
+            candidate = i
+
+    return [[int(sp_[i][0]) for i in g] for g in groups]
+
+
+def average_hough_lines(group_indices, peaks):
+    """
+    Average lines ddefined in <peaks> according to indices groupings
+    defined in <group_indices>
+    """
+    # TODO: handle variable angles, at the moment takes the first in group
+    new_angles = [[peaks[1][i] for i in g][0] for g in group_indices]
+    # average distances and round to nearest integer
+    new_dists = [round(np.mean([peaks[2][i] for i in g][0::max(len(g)-1,1)])) for g in group_indices]
+
+    return (np.array(range(len(new_angles))), np.array(new_angles), np.array(new_dists))
+
+
+def fill_hough_groups(X, group_angles, group_dists, av_angle, av_dist):
+    """
+    Alter values in <X_cont> across line defined by <average> to equal 1 if
+    corresponding point in any of those defined in <group> are non-zero
+    """
+    l = X.shape[0]-1
+
+    X_merg = X.copy()
+    
+    # indices defining all lines in group
+    xandy_group = [get_indices_of_line(l, angle, dist) for angle,dist in zip(group_angles, group_dists)]
+    # indices defining the average line
+    x_av, y_av = get_indices_of_line(l, av_angle, av_dist)
+
+    # If any elements along lines in group are 1
+    # set corresponding element in average line to 1
+    for i,(x,y) in enumerate(zip(x_av, y_av)):
+        for xg, yg in xandy_group:
+            try:
+                i_ = list(xg).index(x)
+                this_x = xg[i_]
+                this_y = yg[i_]
+            except ValueError:
+                continue
+            if X[this_x, this_y]:
+                for xg2, yg2 in xandy_group:
+                    try:
+                        i_ = list(yg2).index(y)
+                        this_x2 = xg2[i_]
+                        this_y2 = yg2[i_]
+                    except IndexError:
+                        continue
+                    X_merg[this_x2, this_y2] = 1
+                break
+
+    return X_merg
+
+
+def group_and_fill_hough(X, peaks, filename):
+    
+    X_merg = X.copy()
+    
+    group_indices = group_hough_lines(peaks)
+    averaged_peaks = average_hough_lines(group_indices, peaks)
+
+    peaks_angles = peaks[1]
+    peaks_dists = peaks[2]
+
+    for i in range(len(group_indices)):
+        gi = group_indices[i]
+
+        av_angle = averaged_peaks[1][i]
+        av_dist = averaged_peaks[2][i]
+
+        group_angles = peaks_angles[gi]
+        group_dists = peaks_dists[gi]
+        group_dists = list(range(int(min(group_dists)), int(max(group_dists))))
+        group_angles = [group_angles[0]]*len(group_dists)
+
+        X_merg = fill_hough_groups(X, group_angles, group_dists, av_angle, av_dist)
+
+    if filename:
+        skimage.io.imsave(filename, X_merg)
+
+    return X_merg, averaged_peaks
 
 
 

@@ -4,6 +4,7 @@ import cv2
 
 from scipy import signal
 from scipy import misc
+from scipy.ndimage import binary_opening
 import skimage
 from skimage.transform import hough_line, hough_line_peaks
 from skimage.feature import canny
@@ -127,6 +128,34 @@ def diagonal_gaussian(X, gauss_sigma, filename=False):
     return X_gauss
 
 
+def make_symmetric(X):
+    X_copy = X.copy()
+    non_zero = np.where(X_copy==1)
+    top_triangle_x = [x for x,y in zip(*non_zero) if x>y]
+    top_triangle_y = [y for x,y in zip(*non_zero) if x>y]
+
+    X_copy[top_triangle_y, top_triangle_x] = 1.0
+
+    return X_copy
+
+
+def edges_to_contours(X, kernel_size=10):
+    X_copy = X.copy()
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size,kernel_size))
+    close = cv2.morphologyEx(X_copy, cv2.MORPH_CLOSE, kernel)
+    X_copy = close-X_copy
+    X_copy[X_copy==-1]=0
+    return X_copy
+
+
+def apply_bin_op(X, binop_dim):
+    binop_struct = np.zeros((binop_dim, binop_dim))
+    np.fill_diagonal(binop_struct, 1)
+    X_binop = binary_opening(X, structure=binop_struct).astype(np.int)
+
+    return X_binop
+
+
 def plot_hough(image, h, theta, d, peaks, out_file):
     fig, axes = plt.subplots(1, 3, figsize=(15, 6))
     ax = axes.ravel()
@@ -197,7 +226,7 @@ def hough_transform_new(X, hough_high_angle, hough_low_angle, hough_threshold, f
 
 
 def plot_hough_new(X, peaks, out_file):
-    fig, ax = plt.subplots(figsize=(15, 6))
+    fig, ax = plt.subplots(figsize=(30, 12))
 
     ax.imshow(X, cmap=cm.gray)
     ax.set_ylim((X.shape[0], 0))
@@ -211,3 +240,57 @@ def plot_hough_new(X, peaks, out_file):
     plt.tight_layout()
     plt.savefig(out_file)
     plt.clf()
+
+
+
+#   filter_size = 5
+
+#   h, w = X_cont.shape
+
+#   X_fill = np.zeros((h, w))
+
+#   def get_centered_array(X, x, y, s):
+#       """
+#       Return <s>x<s> array centered on <x> and <y> in <X>
+#       Any part of returned array that exists outside of <X>
+#       is be filled with nans
+#       """
+#       o, r = np.divmod(s, 2)
+#       l = (x-(o+r-1)).clip(0)
+#       u = (y-(o+r-1)).clip(0)
+#       X_ = X[l: x+o+1, u:y+o+1]
+#       out = np.full((s, s), np.nan, dtype=X.dtype)
+#       out[:X_.shape[0], :X_.shape[1]] = X_
+#       return out
+
+
+#   def is_surrounded(X):
+#       """
+#       Is the center square in x sufficiently surrounded by 
+#       non zero 
+#       """
+#       triu = np.triu(X)
+#       tril = np.tril(X)
+#       return 1 in triu and 1 in tril
+
+#   import tqdm
+#   for i in tqdm.tqdm(range(x_height)):
+#       for j in range(x_width):
+#           if i > j:
+#               continue
+#           cent_X = get_centered_array(X_cont, i, j, filter_size)
+#           if is_surrounded(cent_X):
+#               X_fill[i,j] = 1
+
+#   X_fill = X_fill + X_fill.T - np.diag(np.diag(X_fill))
+
+#   if save_imgs:
+#       skimage.io.imsave(merg_filename, X_fill)
+
+
+
+
+
+
+
+

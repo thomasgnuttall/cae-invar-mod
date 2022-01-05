@@ -9,30 +9,22 @@ from complex_auto.motives_extractor import *
 from complex_auto.motives_extractor.extractor import *
 
 from exploration.pitch import extract_pitch_track
-from exploration.img import remove_diagonal, convolve_array_tile, binarize, diagonal_gaussian, hough_transform, hough_transform_new, scharr, sobel
-from exploration.segments import get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, remove_short, group_segments, extend_segments
-from exploration.sequence import apply_exclusions, contains_silence, min_gap, too_stable, convert_seqs_to_timestep, get_stability_mask, add_center_to_mask
+from exploration.img import (
+    remove_diagonal, convolve_array_tile, binarize, diagonal_gaussian, 
+    hough_transform, hough_transform_new, scharr, sobel,
+    apply_bin_op, make_symmetric, edges_to_contours)
+from exploration.segments import (
+    get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, 
+    remove_short, group_segments, extend_segments, group_and_fill_hough)
+from exploration.sequence import (
+    apply_exclusions, contains_silence, min_gap, too_stable, 
+    convert_seqs_to_timestep, get_stability_mask, add_center_to_mask,
+    remove_below_length)
 from exploration.evaluation import load_annotations_new, evaluate_all_tiers, evaluation_report, get_coverage
 from exploration.visualisation import plot_all_sequences, plot_pitch
 from exploration.io import load_sim_matrix, write_all_sequence_audio, load_yaml
 from exploration.pitch import cents_to_pitch, pitch_seq_to_cents, pitch_to_cents
 
-
-def remove_below_length(starts_seq, lengths_seq, timestep, min_length):
-    starts_seq_long = []
-    lengths_seq_long = []
-    for i, group in enumerate(lengths_seq):
-        this_group_l = []
-        this_group_s = []
-        for j,l in enumerate(group):
-            if l >= min_length/timestep:
-                this_group_l.append(l)
-                this_group_s.append(starts_seq[i][j])
-        if this_group_s:
-            starts_seq_long.append(this_group_s)
-            lengths_seq_long.append(this_group_l)
-
-    return starts_seq_long, lengths_seq_long
 
 
 ################
@@ -89,17 +81,21 @@ conv_filter = sobel
 #   scharr, 0.56
 #   sobel unidrectional, 0.1
 #   sobel bidirectional, 0.15
-bin_thresh = 0.1
+bin_thresh = 0.11
 # lower bin_thresh for areas surrounding segments
-bin_thresh_segment = 0.08
+bin_thresh_segment = 0.04
 # percentage either size of a segment considered for lower bin thresh
-perc_tail = 0.3
+perc_tail = 0.5
 
 # Gaussian filter along diagonals with sigma...
 gauss_sigma = None
 
 # After gaussian, re-binarize with this threshold
 cont_thresh = 0.15
+
+# morphology params
+etc_kernel_size = 10 # For closing
+binop_dim = 3 # square dimension of binary opening structure (square matrix of zeros with 1 across the diagonal)
 
 # Hough transform parameters
 min_dist_sec = 0 # min dist in seconds between lines
@@ -117,7 +113,7 @@ min_diff_trav = 0.5
 dupl_perc_overlap = 0.75
 
 # Grouping diagonals
-min_pattern_length_seconds = 1.5
+min_pattern_length_seconds = 1.8
 min_length_cqt = min_pattern_length_seconds*sr/cqt_window
 min_in_group = 2 # minimum number of patterns to be included in pattern group
 
@@ -178,8 +174,9 @@ bin_filename = os.path.join(out_dir, '3_Koti Janmani_binary.png') if save_imgs e
 diag_filename = os.path.join(out_dir, '4_Koti Janmani_diag.png') if save_imgs else None
 gauss_filename = os.path.join(out_dir, '5_Koti Janmani_gauss.png') if save_imgs else None
 cont_filename = os.path.join(out_dir, '6_Koti Janmani_cont.png') if save_imgs else None
-hough_filename = os.path.join(out_dir, '7_Koti Janmani_hough.png') if save_imgs else None
-cont_ext_filename = os.path.join(out_dir, '7_Koti Janmani_cont_ext.png') if save_imgs else None
+binop_filename = os.path.join(out_dir, '7_Koti Janmani_binop.png') if save_imgs else None
+hough_filename = os.path.join(out_dir, '8_Koti Janmani_hough.png') if save_imgs else None
+ext_filename = os.path.join(out_dir, '9_Koti Janmani_cont_ext.png') if save_imgs else None
 
 
 if save_imgs:
@@ -214,18 +211,30 @@ else:
     X_gauss = X_diag
     X_cont = X_gauss
 
-print('Applying Hough Transform')
-peaks = hough_transform_new(X_cont, hough_high_angle, hough_low_angle, hough_threshold, filename=hough_filename)
+print('Ensuring symmetry between upper and lower triangle in array')
+X_sym = make_symmetric(X_cont)
 
-print(f'Extending segments in convolved array along Hough Lines with lower threshold of {bin_thresh_segment}, (previously {bin_thresh})')
-X_cont_ext = extend_segments(X_conv, X_cont, peaks, min_diff_trav, cqt_window, sr, bin_thresh_segment, perc_tail)
+print('Identifying and isolating regions between edges')
+X_fill = edges_to_contours(X_sym, etc_kernel_size)
+
+print('Cleaning isolated non-directional regions using morphological opening')
+X_binop = apply_bin_op(X_fill, binop_dim)
 
 if save_imgs:
-    skimage.io.imsave(cont_ext_filename, X_cont_ext)
+    skimage.io.imsave(binop_filename, X_binop)
+
+print('Applying Hough Transform')
+peaks = hough_transform_new(X_binop, hough_high_angle, hough_low_angle, hough_threshold, filename=hough_filename)
+
+print(f'Extending segments in convolved array along Hough Lines with lower threshold of {bin_thresh_segment}, (previously {bin_thresh})')
+X_ext = extend_segments(X_conv, X_binop, peaks, min_diff_trav, cqt_window, sr, bin_thresh_segment, perc_tail)
+
+if save_imgs:
+    skimage.io.imsave(ext_filename, X_ext)
 
 print('Extracting segments along Hough lines')
 # Format - [[(x,y), (x1,y1)],...]
-all_segments = get_all_segments(X_cont_ext, peaks, min_diff_trav, min_length_cqt, cqt_window, sr)
+all_segments = get_all_segments(X_ext, peaks, min_diff_trav, min_length_cqt, cqt_window, sr)
 print(f'    {len(all_segments)} found...')
 
 print('Breaking segments with stable regions')
@@ -284,7 +293,7 @@ evaluation_report(metrics)
 print('Writing all sequences')
 plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_hough', clear_dir=True, plot_kwargs=plot_kwargs)
 write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_hough')
-
+annotations_tag.to_csv('output/new_hough/annotations.csv', index=False)
 
 
 
@@ -400,8 +409,11 @@ def add_segments_to_plot(arr, segments):
     return arr_
 
 
-X_canvas = X_samp.copy()
+X_canvas = X.copy()
 X_canvas[:] = 0
+
+samp1 = 5000
+samp2 = 9000
 
 # Orig matrix
 X_orig = X.copy()[samp1:samp2,samp1:samp2]
@@ -427,14 +439,35 @@ X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr,
 X_patterns_samp = X_patterns.copy()[samp1:samp2,samp1:samp2]
 skimage.io.imsave('images/patterns_sim_mat.png', X_patterns_samp)
 
+import matplotlib.image
+
+def join_plots(A, B, both_binary=True):
+
+    h,w = A.shape
+    
+    rgb = np.zeros((h,w,3))
+
+    if both_binary:
+        rgb[A>0] = np.array([255,255,255]) # WHITE
+        rgb[B>0] = np.array([255,0,0]) # RED
+
+        x,y = np.where(np.logical_and(A > 1, B > 1))
+        rgb[x,y] = np.array([207, 126, 190]) # PINK
+    else:
+        scaled = ((A - A.min()) / (A.max() - A.min()) )*255
+        rgb[:,:,0] = scaled
+        rgb[:,:,1] = scaled
+        rgb[:,:,2] = scaled
+        rgb[B>0] = np.array([255,0,0]) # RED
+
+    return rgb
+
+X_joined = join_plots(X_orig, X_ext[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/joined_non_binary.png', X_joined.astype(np.uint8))
 
 
-
-
-
-
-
-
+X_joined = join_plots(X_annotate_samp, X_patterns_samp)
+matplotlib.image.imsave('images/joined.png', X_joined.astype(np.uint8))
 
 
 

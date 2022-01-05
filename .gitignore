@@ -2,9 +2,11 @@
 *.png
 *.mp3
 notes.txt
+todo.txt
 *.pyc
 *.pyc.bz
 pretrained_models/*
+annotations/*
 .ipynb_checkpoints/*
 output/*
 .DS_Store
