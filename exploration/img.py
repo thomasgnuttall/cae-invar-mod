@@ -145,7 +145,7 @@ def edges_to_contours(X, kernel_size=10):
     close = cv2.morphologyEx(X_copy, cv2.MORPH_CLOSE, kernel)
     X_copy = close-X_copy
     X_copy[X_copy==-1]=0
-    return X_copy
+    return close#X_copy
 
 
 def apply_bin_op(X, binop_dim):

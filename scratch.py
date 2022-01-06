@@ -14,7 +14,7 @@ from exploration.img import (
     hough_transform, hough_transform_new, scharr, sobel,
     apply_bin_op, make_symmetric, edges_to_contours)
 from exploration.segments import (
-    get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, 
+    extract_segments_new, get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, 
     remove_short, group_segments, extend_segments, group_and_fill_hough)
 from exploration.sequence import (
     apply_exclusions, contains_silence, min_gap, too_stable, 
@@ -83,7 +83,7 @@ conv_filter = sobel
 #   sobel bidirectional, 0.15
 bin_thresh = 0.11
 # lower bin_thresh for areas surrounding segments
-bin_thresh_segment = 0.04
+bin_thresh_segment = 0.07
 # percentage either size of a segment considered for lower bin thresh
 perc_tail = 0.5
 
@@ -214,8 +214,14 @@ else:
 print('Ensuring symmetry between upper and lower triangle in array')
 X_sym = make_symmetric(X_cont)
 
+print('Applying Hough Transform to edges')
+peaks = hough_transform_new(X_sym, hough_high_angle, hough_low_angle, hough_threshold)
+
+print(f'Extending edges in convolved array along Hough Lines with lower threshold of {bin_thresh_segment}, (previously {bin_thresh})')
+X_ext = extend_segments(X_conv, X_sym, peaks, min_diff_trav, cqt_window, sr, bin_thresh_segment, perc_tail)
+
 print('Identifying and isolating regions between edges')
-X_fill = edges_to_contours(X_sym, etc_kernel_size)
+X_fill = edges_to_contours(X_ext, etc_kernel_size)
 
 print('Cleaning isolated non-directional regions using morphological opening')
 X_binop = apply_bin_op(X_fill, binop_dim)
@@ -223,19 +229,18 @@ X_binop = apply_bin_op(X_fill, binop_dim)
 if save_imgs:
     skimage.io.imsave(binop_filename, X_binop)
 
-print('Applying Hough Transform')
-peaks = hough_transform_new(X_binop, hough_high_angle, hough_low_angle, hough_threshold, filename=hough_filename)
+#print('Applying Hough Transform to contours')
+#peaks = hough_transform_new(X_binop, hough_high_angle, hough_low_angle, hough_threshold, filename=hough_filename)
 
-print(f'Extending segments in convolved array along Hough Lines with lower threshold of {bin_thresh_segment}, (previously {bin_thresh})')
-X_ext = extend_segments(X_conv, X_binop, peaks, min_diff_trav, cqt_window, sr, bin_thresh_segment, perc_tail)
+## Join segments that are sufficiently close
 
-if save_imgs:
-    skimage.io.imsave(ext_filename, X_ext)
-
-print('Extracting segments along Hough lines')
+print('Extracting segments using flood fill and centroid')
 # Format - [[(x,y), (x1,y1)],...]
-all_segments = get_all_segments(X_ext, peaks, min_diff_trav, min_length_cqt, cqt_window, sr)
+all_segments = extract_segments_new(X_binop)
+#all_segments = get_all_segments(X_binop, peaks, min_diff_trav, min_length_cqt, cqt_window, sr)
 print(f'    {len(all_segments)} found...')
+
+all_segments = [[(x0, y0), (x1,y1)] for (x0, y0), (x1,y1) in all_segments if all([0 <= c < X.shape[0] for c in [x0,y0,x1,y1]])]
 
 print('Breaking segments with stable regions')
 # Format - [[(x,y), (x1,y1)],...]
@@ -251,12 +256,16 @@ print('Reducing Segments')
 # The Hough transform allows for the same segment to be intersected
 # twice by lines of slightly different angle. We want to take the 
 # longest of these duplicates and discard the rest
-all_segments_reduced = reduce_duplicates(all_broken_segments, perc_overlap=dupl_perc_overlap)
-print(f'    {len(all_segments_reduced)} unique segments...')
+#all_segments_reduced = reduce_duplicates(all_broken_segments, perc_overlap=dupl_perc_overlap)
+#print(f'    {len(all_segments_reduced)} unique segments...')
 
-all_segments_reduced = remove_short(all_segments_reduced, min_length_cqt)
+# all_segments_reduced = remove_short(all_segments_reduced, min_length_cqt)
+# print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pattern_length_seconds}s...')
+
+all_segments_reduced = remove_short(all_broken_segments, min_length_cqt)
 print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pattern_length_seconds}s...')
 
+all_segments_reduced = [[(x0, y0), (x1,y1)] for (x0, y0), (x1,y1) in all_segments_reduced if x1>x0 and y1>y0]
 print('Grouping Segments')
 all_groups = group_segments(all_segments_reduced, perc_overlap=dupl_perc_overlap)
 print(f'    {len(all_groups)} groups found...')
@@ -417,27 +426,27 @@ samp2 = 9000
 
 # Orig matrix
 X_orig = X.copy()[samp1:samp2,samp1:samp2]
-skimage.io.imsave('images/sim_mat.png', X_orig)
+#skimage.io.imsave('images/sim_mat.png', X_orig)
 
 # Annotations
 X_annotate = add_annotations_to_plot(X_canvas, annotations_orig, sr, cqt_window)
 X_annotate_samp = X_annotate.copy()[samp1:samp2,samp1:samp2]
-skimage.io.imsave('images/annotations_sim_mat.png', X_annotate_samp)
+#skimage.io.imsave('images/annotations_sim_mat.png', X_annotate_samp)
 
 # Found segments from image processing
 X_segments = add_segments_to_plot(X_canvas, all_segments)
 X_segments_samp = X_segments.copy()[samp1:samp2,samp1:samp2]
-skimage.io.imsave('images/segments_sim_mat.png', X_segments_samp)
+#skimage.io.imsave('images/segments_sim_mat.png', X_segments_samp)
 
 # Found segments broken from image processing
 X_segments = add_segments_to_plot(X_canvas, all_segments_reduced)
 X_segments_samp = X_segments.copy()[samp1:samp2,samp1:samp2]
-skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments_samp)
+#skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments_samp)
 
 # Patterns from full pipeline
 X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr, cqt_window)
 X_patterns_samp = X_patterns.copy()[samp1:samp2,samp1:samp2]
-skimage.io.imsave('images/patterns_sim_mat.png', X_patterns_samp)
+#skimage.io.imsave('images/patterns_sim_mat.png', X_patterns_samp)
 
 import matplotlib.image
 
@@ -462,8 +471,11 @@ def join_plots(A, B, both_binary=True):
 
     return rgb
 
-X_joined = join_plots(X_orig, X_ext[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/joined_non_binary.png', X_joined.astype(np.uint8))
+X_joined = join_plots(X_orig, X_segments[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/joined_non_binary_ext.png', X_joined.astype(np.uint8))
+
+X_joined = join_plots(X_orig, X_binop[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/joined_non_binary_binop.png', X_joined.astype(np.uint8))
 
 
 X_joined = join_plots(X_annotate_samp, X_patterns_samp)

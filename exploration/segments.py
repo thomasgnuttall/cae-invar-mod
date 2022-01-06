@@ -1,9 +1,16 @@
 import numpy as np
+from numpy import ones,vstack
+from numpy.linalg import lstsq
 
+from scipy.ndimage import label, generate_binary_structure
 import skimage.io
 from sklearn.cluster import DBSCAN
 from itertools import groupby
 from operator import itemgetter
+
+
+
+import tqdm
 
 def get_extremes(angle, dist, l):
     # Make a line with "num" points...
@@ -25,7 +32,7 @@ def get_extremes(angle, dist, l):
         y1 = l
         x1 = int((dist - y1*np.sin(angle))/np.cos(angle))
 
-    return x0, y0, x1, y1
+    return y0, x0, y1, x1
 
 
 def extend_segment(segment, max_l, padding):
@@ -61,6 +68,80 @@ def get_indices_of_line(l, angle, dist):
     y = y.astype(int)
 
     return x, y
+
+
+def extract_segments_new(X):
+    # Goal: for each thick diagonal extract one segment corresponding to pattern
+    # for that iagonal
+    s = generate_binary_structure(2, 2)
+    labels, numL = label(X, structure=s)
+    label_indices = [(labels == i).nonzero() for i in range(1, numL+1)]
+
+    ln = 100
+
+    all_segments = []
+    for ln in tqdm.tqdm(range(len(label_indices))):
+        x,y = label_indices[ln]
+
+        points = list(zip(x,y))
+
+        # centroid of entire diagonal
+        c_x, c_y = (int(sum(x) / len(points)), int(sum(y) / len(points)))
+
+        # split into top left quadrant and bottom right quadrant
+        # since diagonal runs from top left to bottom right, this splits it in half 
+        #   (top right and bottom left quadrant are empty in diagonal bounding box)
+        top_half = [(x,y) for x,y in points if x <= c_x and y <= c_y]
+        bottom_half = [(x,y) for x,y in points if x > c_x and y > c_y]
+
+        top_half_x = [i[0] for i in top_half]
+        top_half_y = [i[1] for i in top_half]
+        bottom_half_x = [i[0] for i in bottom_half]
+        bottom_half_y = [i[1] for i in bottom_half]
+
+        # Two centroids, one for each half
+        # The returned segment will pass through both of these centroids
+        # splitting into two halves accounts for non 45 degree orientation
+        th_cent = (int(sum(top_half_x) / len(top_half)), int(sum(top_half_y) / len(top_half)))
+        bh_cent = (int(sum(bottom_half_x) / len(bottom_half)), int(sum(bottom_half_y) / len(bottom_half)))
+
+        # Get x and y limits of bounding box of segment
+        x_sorted = sorted(points, key=lambda y: x[0])
+        y_sorted = sorted(points, key=lambda y: x[1])
+        north_y = x_sorted[0][1]
+        south_y = x_sorted[-1][1]
+        west_x = y_sorted[0][0]
+        east_x = y_sorted[-1][0]
+
+        # We want the points at which the line that goes through 
+        # the two centroids intersects the bounding box
+        cent_points = [th_cent, bh_cent]
+        x_coords, y_coords = zip(*cent_points)
+        A = vstack([x_coords,ones(len(x_coords))]).T
+        # gradient and intercecpt of line passing through centroids
+        m, c = lstsq(A, y_coords)[0]
+        get_y = lambda x: m*x + c
+        get_x = lambda y: (y - c)/m
+
+        # does the line intersect the roof or sides of the bounding box?
+        does_intersect_roof = get_y(west_x) > north_y
+
+        if does_intersect_roof:
+            y0 = north_y
+            x0 = get_x(y0)
+
+            y1 = south_y
+            x1 = get_x(south_y)
+        else:
+            x0 = east_x
+            y0 = get_y(x0)
+
+            x1 = west_x
+            y1 = get_y(west_x)
+
+        all_segments.append([(int(x0), int(y0)), (int(x1), int(y1))])
+
+    return all_segments
 
 
 def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr, padding=None):
@@ -116,8 +197,10 @@ def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr, padding=None
             this_segment = [non_zero[i]]
 
     this_segment.append(non_zero[-1])
+
     if padding:
         this_segment = extend_segment(this_segment, max_l, padding)
+
     segments.append(this_segment)
 
     all_segments = []
@@ -133,12 +216,11 @@ def extend_segments(X_conv, X_cont, peaks, min_diff_trav, cqt_window, sr, bin_th
     The segments surfaced by the convolution have tails that fade to 0, we want the binarizing
     threshold to be lower for these tails than the rest of the array
     """
-    new_conv = X_cont.copy()
+    new_cont = X_cont.copy()
     all_segments = []
     for _, angle, dist in zip(*peaks):
         segments = extract_segments(X_cont, angle, dist, min_diff_trav, cqt_window, sr, padding=perc_tail)
 
-        # If either of the lengths are above minimum length, add to all segments
         for s in segments:
             x0 = s[0][0]
             y0 = s[0][1]
@@ -155,8 +237,8 @@ def extend_segments(X_conv, X_cont, peaks, min_diff_trav, cqt_window, sr, bin_th
             
             for X,Y in zip(x,y):
                 if X_conv[X,Y] >= bin_thresh_segment:
-                    new_conv[X,Y] = 1
-    return new_conv
+                    new_cont[X,Y] = 1
+    return new_cont
 
 
 def get_all_segments(X, peaks, min_diff_trav, min_length_cqt, cqt_window, sr):
@@ -273,8 +355,11 @@ def do_patterns_overlap(x0, x1, y0, y1, perc_overlap):
     p0_indices = set(range(x0, x1+1))
     p1_indices = set(range(y0, y1+1))
     
-    o1 = len(p1_indices.intersection(p0_indices))/len(p0_indices)>perc_overlap
-    o2 = len(p1_indices.intersection(p0_indices))/len(p1_indices)>perc_overlap
+    try:
+        o1 = len(p1_indices.intersection(p0_indices))/len(p0_indices)>perc_overlap
+        o2 = len(p1_indices.intersection(p0_indices))/len(p1_indices)>perc_overlap
+    except:
+        import ipdb; ipdb.set_trace()
     
     return o1 and o2
 
