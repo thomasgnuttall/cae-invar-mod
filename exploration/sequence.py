@@ -116,9 +116,9 @@ def convert_seqs_to_timestep(all_groups, cqt_window, sr, timestep):
     for group in all_groups:
         this_l = []
         this_s = []
-        for g in group:
-            l = g[1]-g[0]
-            s = g[0]
+        for x0, x1 in group:
+            l = x1-x0
+            s = x0
             if l > 0:
                 this_l.append(l)
                 this_s.append(s)

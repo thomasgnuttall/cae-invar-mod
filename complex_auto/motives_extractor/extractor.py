@@ -140,7 +140,7 @@ def patterns_to_csv(patterns, midi_score, h, offset, raw = False):
 
     Parameters
     ----------
-    pattersn : list
+    patterns : list
         List of patterns with its occurrences.
     midi_score : list
         The score of the piece (read from CSV).

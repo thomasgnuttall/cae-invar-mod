@@ -8,8 +8,6 @@ from sklearn.cluster import DBSCAN
 from itertools import groupby
 from operator import itemgetter
 
-
-
 import tqdm
 
 def get_extremes(angle, dist, l):
@@ -70,58 +68,71 @@ def get_indices_of_line(l, angle, dist):
     return x, y
 
 
-def extract_segments_new(X):
-    # Goal: for each thick diagonal extract one segment corresponding to pattern
-    # for that iagonal
-    s = generate_binary_structure(2, 2)
+def get_label_indices(X, structure_size=2):
+    s = generate_binary_structure(structure_size, structure_size)
     labels, numL = label(X, structure=s)
     label_indices = [(labels == i).nonzero() for i in range(1, numL+1)]
+    return label_indices
 
-    ln = 100
+
+def extract_segments_new(X):
+    
+    # size of square array
+    n = X.shape[0]
+
+    # Goal: for each thick diagonal extract one segment 
+    # corresponding to pattern for that diagonal
+    label_indices = get_label_indices(X)
 
     all_segments = []
-    for ln in tqdm.tqdm(range(len(label_indices))):
-        x,y = label_indices[ln]
-
+    for ix, (x,y) in enumerate(label_indices):
+        # (x,y) indices of points that define this diagonal.
+        # These correspond to an area more than 1 element thick,
+        # the objective is to identify a single path through
+        # this area to nominate as the candidate underlying segment/pattern
         points = list(zip(x,y))
 
         # centroid of entire diagonal
         c_x, c_y = (int(sum(x) / len(points)), int(sum(y) / len(points)))
 
-        # split into top left quadrant and bottom right quadrant
-        # since diagonal runs from top left to bottom right, this splits it in half 
+        # split into top left quadrant (tlq) and bottom right quadrant (brq) 
         #   (top right and bottom left quadrant are empty in diagonal bounding box)
-        top_half = [(x,y) for x,y in points if x <= c_x and y <= c_y]
-        bottom_half = [(x,y) for x,y in points if x > c_x and y > c_y]
+        tlq = [(x,y) for x,y in points if x <= c_x and y <= c_y]
+        brq = [(x,y) for x,y in points if x > c_x and y > c_y]
 
-        top_half_x = [i[0] for i in top_half]
-        top_half_y = [i[1] for i in top_half]
-        bottom_half_x = [i[0] for i in bottom_half]
-        bottom_half_y = [i[1] for i in bottom_half]
+        tlq_x = [i[0] for i in tlq]
+        tlq_y = [i[1] for i in tlq]
 
-        # Two centroids, one for each half
+        brq_x = [i[0] for i in brq]
+        brq_y = [i[1] for i in brq]
+
+        # Compute the centroid for each of the two quarters
+        tlq_centroid = (int(sum(tlq_x) / len(tlq)), int(sum(tlq_y) / len(tlq)))
+        brq_centroid = (int(sum(brq_x) / len(brq)), int(sum(brq_y) / len(brq)))
+
+        # Get x and y limits of bounding box of entire area
+        x_sorted = sorted(points, key=lambda y: y[0])
+        y_sorted = sorted(points, key=lambda y: y[1])
+        
+        north_y = y_sorted[0][1] # line across the top
+        south_y = y_sorted[-1][1] # line across the bottom
+        west_x  = x_sorted[0][0] # line across left side
+        east_x  = x_sorted[-1][0] # line across right side
+
         # The returned segment will pass through both of these centroids
-        # splitting into two halves accounts for non 45 degree orientation
-        th_cent = (int(sum(top_half_x) / len(top_half)), int(sum(top_half_y) / len(top_half)))
-        bh_cent = (int(sum(bottom_half_x) / len(bottom_half)), int(sum(bottom_half_y) / len(bottom_half)))
-
-        # Get x and y limits of bounding box of segment
-        x_sorted = sorted(points, key=lambda y: x[0])
-        y_sorted = sorted(points, key=lambda y: x[1])
-        north_y = x_sorted[0][1]
-        south_y = x_sorted[-1][1]
-        west_x = y_sorted[0][0]
-        east_x = y_sorted[-1][0]
-
-        # We want the points at which the line that goes through 
-        # the two centroids intersects the bounding box
-        cent_points = [th_cent, bh_cent]
-        x_coords, y_coords = zip(*cent_points)
-        A = vstack([x_coords,ones(len(x_coords))]).T
+        # and terminate at the edges of the bounding box. Using the 
+        # centroids of two quarters accounts for non 45 degree orientation
+        centroids = [tlq_centroid, brq_centroid]
+        x_coords, y_coords = zip(*centroids)
+        
         # gradient and intercecpt of line passing through centroids
-        m, c = lstsq(A, y_coords)[0]
-        get_y = lambda x: m*x + c
-        get_x = lambda y: (y - c)/m
+        A = vstack([x_coords, ones(len(x_coords))]).T
+        m, c = lstsq(A, y_coords, rcond=None)[0]
+
+        # functions for converting between
+        # x and y on that line
+        get_y = lambda xin: m*xin + c
+        get_x = lambda yin: (yin - c)/m
 
         # does the line intersect the roof or sides of the bounding box?
         does_intersect_roof = get_y(west_x) > north_y
@@ -131,15 +142,37 @@ def extract_segments_new(X):
             x0 = get_x(y0)
 
             y1 = south_y
-            x1 = get_x(south_y)
+            x1 = get_x(y1)
         else:
-            x0 = east_x
+            x0 = west_x
             y0 = get_y(x0)
 
-            x1 = west_x
-            y1 = get_y(west_x)
+            x1 = east_x
+            y1 = get_y(x1)
+        
+        # int() always rounds down
+        roundit = lambda yin: int(round(yin))
 
-        all_segments.append([(int(x0), int(y0)), (int(x1), int(y1))])
+        # Points are computed using a line learnt
+        # using least squares, there is a small chance that 
+        # this results in one of the coordinates being slightly
+        # over the limits of the array, the rounding that occurs 
+        # when converting to int may make this +/- 1 outside of array
+        # limits
+        if roundit(x0) < 0:
+            x0 = 0
+            y0 = roundit(get_y(0))
+        if roundit(y0) < 0:
+            y0 = 0
+            x0 = roundit(get_x(0))
+        if roundit(x1) >= n:
+            x1 = n-1
+            y1 = roundit(get_y(x1))
+        if roundit(y1) >= n:
+            y1 = n-1
+            x1 = roundit(get_x(y1))
+        
+        all_segments.append([(roundit(x0), roundit(y0)), (roundit(x1), roundit(y1))])
 
     return all_segments
 
@@ -292,16 +325,16 @@ def break_segment(segment_pair, mask, cqt_window, sr, timestep):
     
     # (x start, y start), (x end, y end)
     x_start = segment_pair[0][0]
-    x_start_ts = int((x_start*cqt_window)/(sr*timestep))
+    x_start_ts = round((x_start*cqt_window)/(sr*timestep))
 
     x_end = segment_pair[1][0]
-    x_end_ts = int((x_end*cqt_window)/(sr*timestep))
+    x_end_ts = round((x_end*cqt_window)/(sr*timestep))
 
     y_start = segment_pair[0][1]
-    y_start_ts = int((y_start*cqt_window)/(sr*timestep))
+    y_start_ts = round((y_start*cqt_window)/(sr*timestep))
 
     y_end = segment_pair[1][1]
-    y_end_ts = int((y_end*cqt_window)/(sr*timestep))
+    y_end_ts = round((y_end*cqt_window)/(sr*timestep))
 
     stab_x = mask[x_start_ts:x_end_ts]
     stab_y = mask[y_start_ts:y_end_ts]
@@ -311,29 +344,43 @@ def break_segment(segment_pair, mask, cqt_window, sr, timestep):
         break_points_x = np.where(stab_x==2)[0]
         break_points_y = np.where(stab_y==2)[0]
         if len(break_points_y) > len(break_points_x):
-            break_points = break_points_y
+            bpy_ = break_points_y
+            # break points x should correspond to the same proportion through the sequence
+            # as break points y, since they can be different lengths
+            bpx_ = [round((b/len(stab_y))*len(stab_x)) for b in bpy_]
+            
+            # convert back to cqt_window granularity sequence
+            bpx = [round(x*(sr*timestep)/cqt_window) for x in bpx_]
+            bpy = [round(y*(sr*timestep)/cqt_window) for y in bpy_]
         else:
-            break_points = break_points_x
+            bpx_ = break_points_x
+            # break points y should correspond to the same proportion through the sequence
+            # as break points x, since they can be different lengths
+            bpy_ = [round((b/len(stab_x))*len(stab_y)) for b in bpx_]
+            
+            # convert back to cqt_window granularity sequence
+            bpy = [round(x*(sr*timestep)/cqt_window) for x in bpy_]
+            bpx = [round(x*(sr*timestep)/cqt_window) for x in bpx_]
     else:
-        return []
-
-    break_points_x = [x_start + int(x*(sr*timestep)/cqt_window) for x in break_points]
-    break_points_y = [y_start + int(x*(sr*timestep)/cqt_window) for x in break_points]
+        # nothing to be broken, return original segment
+        return [[(x_start, y_start), (x_end, y_end)]]
 
     new_segments = []
-    for i in range(len(break_points_x)):
-        bx = break_points_x[i]
-        by = break_points_y[i]
+    for i in range(len(bpx)):
+        bx = bpx[i]
+        by = bpy[i]
 
         if i == 0:
-            new_segments.append([(x_start, y_start), (bx, by)])
+            new_segments.append([(x_start, y_start), (x_start+bx, y_start+by)])
         else:
-            bx1 = break_points_x[i-1]
-            by1 = break_points_y[i-1]
+            # break points from last iterations
+            # we begin on these this time
+            bx1 = bpx[i-1]
+            by1 = bpy[i-1]
 
-            new_segments.append([(bx1, by1), (bx, by)])
+            new_segments.append([(x_start+bx1, y_start+by1), (x_start+bx, y_start+by)])
 
-    new_segments.append([(bx, by), (x_end, y_end)])
+    new_segments.append([(x_start+bx, y_start+by), (x_end, y_end)])
 
     return new_segments
 
@@ -342,11 +389,9 @@ def break_all_segments(all_segments, mask, cqt_window, sr, timestep):
     all_broken_segments = []
     for segment_pair in all_segments:
         broken = break_segment(segment_pair, mask, cqt_window, sr, timestep)
-        if len(broken) > 0:
-            all_broken_segments += broken
-        else:
-            all_broken_segments += [segment_pair]
-
+        # if there is nothing to break, the 
+        # original segment pair is returned
+        all_broken_segments += broken
     return sorted([sorted(x) for x in all_broken_segments])
 
 
@@ -355,11 +400,8 @@ def do_patterns_overlap(x0, x1, y0, y1, perc_overlap):
     p0_indices = set(range(x0, x1+1))
     p1_indices = set(range(y0, y1+1))
     
-    try:
-        o1 = len(p1_indices.intersection(p0_indices))/len(p0_indices)>perc_overlap
-        o2 = len(p1_indices.intersection(p0_indices))/len(p1_indices)>perc_overlap
-    except:
-        import ipdb; ipdb.set_trace()
+    o1 = len(p1_indices.intersection(p0_indices))/len(p0_indices)>perc_overlap
+    o2 = len(p1_indices.intersection(p0_indices))/len(p1_indices)>perc_overlap
     
     return o1 and o2
 
@@ -575,6 +617,7 @@ def group_segments(all_segments, perc_overlap):
         all_groups.append(this_group)
 
     rgd = [remove_group_duplicates(g, perc_overlap) for g in all_groups]
+    
     return rgd
 
 

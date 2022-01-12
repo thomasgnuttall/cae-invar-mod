@@ -42,7 +42,7 @@ sim_path = 'output/full_dataset/Koti Janmani.multitrack-vocal.mp3.npy'
 sr = 44100
 
 # size in frames of cqt window from convolution model
-cqt_window = 1984
+cqt_window = 1988 # was previously set to 1984
 
 # Take sample of data, set to None to use all data
 s1 = None # lower bound index (5000 has been used for testing)
@@ -83,7 +83,7 @@ conv_filter = sobel
 #   sobel bidirectional, 0.15
 bin_thresh = 0.11
 # lower bin_thresh for areas surrounding segments
-bin_thresh_segment = 0.07
+bin_thresh_segment = 0.085
 # percentage either size of a segment considered for lower bin thresh
 perc_tail = 0.5
 
@@ -233,14 +233,14 @@ if save_imgs:
 #peaks = hough_transform_new(X_binop, hough_high_angle, hough_low_angle, hough_threshold, filename=hough_filename)
 
 ## Join segments that are sufficiently close
-
 print('Extracting segments using flood fill and centroid')
 # Format - [[(x,y), (x1,y1)],...]
+t1 = datetime.datetime.now()
 all_segments = extract_segments_new(X_binop)
-#all_segments = get_all_segments(X_binop, peaks, min_diff_trav, min_length_cqt, cqt_window, sr)
 print(f'    {len(all_segments)} found...')
+t2 = datetime.datetime.now()
+print(f"time taken: {t2-t1}")
 
-all_segments = [[(x0, y0), (x1,y1)] for (x0, y0), (x1,y1) in all_segments if all([0 <= c < X.shape[0] for c in [x0,y0,x1,y1]])]
 
 print('Breaking segments with stable regions')
 # Format - [[(x,y), (x1,y1)],...]
@@ -252,20 +252,12 @@ print('Breaking segments with silent regions')
 all_broken_segments = break_all_segments(all_broken_segments, silence_mask, cqt_window, sr, timestep)
 print(f'    {len(all_broken_segments)} broken segments...')
 
+#[(i,((x0,y0), (x1,y1))) for i,((x0,y0), (x1,y1)) in enumerate(all_segments) if x1-x0>10000]
+
 print('Reducing Segments')
-# The Hough transform allows for the same segment to be intersected
-# twice by lines of slightly different angle. We want to take the 
-# longest of these duplicates and discard the rest
-#all_segments_reduced = reduce_duplicates(all_broken_segments, perc_overlap=dupl_perc_overlap)
-#print(f'    {len(all_segments_reduced)} unique segments...')
-
-# all_segments_reduced = remove_short(all_segments_reduced, min_length_cqt)
-# print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pattern_length_seconds}s...')
-
 all_segments_reduced = remove_short(all_broken_segments, min_length_cqt)
 print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pattern_length_seconds}s...')
 
-all_segments_reduced = [[(x0, y0), (x1,y1)] for (x0, y0), (x1,y1) in all_segments_reduced if x1>x0 and y1>y0]
 print('Grouping Segments')
 all_groups = group_segments(all_segments_reduced, perc_overlap=dupl_perc_overlap)
 print(f'    {len(all_groups)} groups found...')
@@ -276,6 +268,9 @@ starts_seq, lengths_seq = convert_seqs_to_timestep(all_groups, cqt_window, sr, t
 print('Applying exclusion functions')
 #starts_seq_exc, lengths_seq_exc = apply_exclusions(raw_pitch, starts_seq, lengths_seq, exclusion_functions, min_in_group)
 starts_seq_exc,  lengths_seq_exc = remove_below_length(starts_seq, lengths_seq, timestep, min_pattern_length_seconds)
+
+starts_seq_exc = [p for p in starts_seq_exc if len(p)>min_in_group]
+lengths_seq_exc = [p for p in lengths_seq_exc if len(p)>min_in_group]
 
 starts_sec_exc = [[x*timestep for x in p] for p in starts_seq_exc]
 lengths_sec_exc = [[x*timestep for x in l] for l in lengths_seq_exc]
@@ -340,6 +335,24 @@ annotations_tag.to_csv('output/new_hough/annotations.csv', index=False)
 
 
 
+# Plot annotation on self sim
+annotations_orig_filt = annotations_orig[annotations_orig['text']=='ma ga ma pa ma ga ri sa']
+X_annotate_single = add_annotations_to_plot(X_canvas, annotations_orig_filt, sr, cqt_window)
+X_joined = join_plots(X_orig, X_annotate_single[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/5_self_sim_annotate_single.png', X_joined.astype(np.uint8))
+
+single_group = annotations_orig_filt[['s1','s2']].values
+len_single = [[int((y-x)/timestep) for x,y in single_group]]
+start_single = [[int(x/timestep) for x,y in single_group]]
+
+print('Writing single sequences')
+plot_all_sequences(raw_pitch, time, len_single, start_single, 'output/single_test', clear_dir=True, plot_kwargs=plot_kwargs)
+write_all_sequence_audio(audio_path, start_single, len_single, timestep, 'output/single_test')
+
+
+# Output annotation
+
+
 
 #####################################################
 ## Plotting annotations and Results on Sim Matrix  ##
@@ -373,11 +386,11 @@ def get_lines(s1, s2):
 
 def add_annotations_to_plot(arr, annotations, sr, cqt_window):
     arr_ = arr.copy()
-    annotations_grouped = annotations_orig.groupby('text')['s1']\
+    annotations_grouped = annotations.groupby('text')['s1']\
                                           .apply(list)\
                                           .reset_index()
 
-    annotations_grouped['s2'] = annotations_orig.groupby('text')['s2']\
+    annotations_grouped['s2'] = annotations.groupby('text')['s2']\
                                                 .apply(list)\
                                                 .reset_index()['s2']
     
@@ -413,9 +426,14 @@ def add_patterns_to_plot(arr, patterns, lengths, sr, cqt_window):
 
 def add_segments_to_plot(arr, segments):
     arr_ = arr.copy()
-    for (x0, y0), (x1, y1) in segments:
+    for i, ((x0, y0), (x1, y1)) in enumerate(segments):
+        if x1 >= n:
+            print(i)
+        if y1 >= n:
+            print(i)
         arr_ = add_line_to_plot(arr_, int(x0), int(x1), int(y0), int(y1))
     return arr_
+
 
 
 X_canvas = X.copy()
@@ -434,7 +452,7 @@ X_annotate_samp = X_annotate.copy()[samp1:samp2,samp1:samp2]
 #skimage.io.imsave('images/annotations_sim_mat.png', X_annotate_samp)
 
 # Found segments from image processing
-X_segments = add_segments_to_plot(X_canvas, all_segments)
+X_segments = add_segments_to_plot(X_canvas, test)
 X_segments_samp = X_segments.copy()[samp1:samp2,samp1:samp2]
 #skimage.io.imsave('images/segments_sim_mat.png', X_segments_samp)
 
@@ -471,16 +489,21 @@ def join_plots(A, B, both_binary=True):
 
     return rgb
 
+
+X_joined = join_plots(X_orig, X_canvas[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/0_self_sim.png', X_joined.astype(np.uint8))
+
 X_joined = join_plots(X_orig, X_segments[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/joined_non_binary_ext.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/1_self_sim_segments.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_binop[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/joined_non_binary_binop.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/2_self_sim_binop.png', X_joined.astype(np.uint8))
 
+X_joined = join_plots(X_orig, X_annotate[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/3_self_sim_annotate.png', X_joined.astype(np.uint8))
 
-X_joined = join_plots(X_annotate_samp, X_patterns_samp)
-matplotlib.image.imsave('images/joined.png', X_joined.astype(np.uint8))
-
+X_joined = join_plots(X_annotate[samp1:samp2,samp1:samp2], X_patterns[samp1:samp2,samp1:samp2])
+matplotlib.image.imsave('images/4_annotations_patterns.png', X_joined.astype(np.uint8))
 
 
 

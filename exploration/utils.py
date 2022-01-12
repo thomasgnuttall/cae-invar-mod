@@ -1,3 +1,4 @@
+import datetime
 import itertools
 import logging
 import os 
@@ -127,5 +128,3 @@ def sql(sql_query, parameters=None):
         sys.exit()        
     conn.close()
     return df
-
-
