@@ -96,7 +96,7 @@ def evaluate_annotations(annotations, starts_sec_exc, lengths_sec_exc, tol, part
                         group_num_dict[ai] = i
                         occ_num_dict[ai] = j
                     else:
-                        # only over write if matc is worse than a previous sequence
+                        # only over write if match is worse than a previous sequence
                         # as such we store the group number and match status of 
                         # the most adequate identified pattern
                         status = results_dict[ai]
@@ -127,6 +127,7 @@ def get_metrics(annotations, starts_sec_exc, suffix=''):
             f'partial_group_precision{suffix}': np.nan,
             f'full_group_precision{suffix}': np.nan,
         }
+
     n_patterns = sum([len(x) for x in starts_sec_exc])
     n_groups = len(starts_sec_exc)
     max_n_in_group = max([len(x) for x in starts_sec_exc])
@@ -135,17 +136,16 @@ def get_metrics(annotations, starts_sec_exc, suffix=''):
     full_match_df = annotations[annotations['match'].str.contains('full match', na=False)]
     full_match_exact_df = annotations[annotations['match'] == 'full match (exact)']
 
-    # partial match
-    partial_prec = len(partial_match_df)/n_patterns
-    partial_rec = len(partial_match_df)/len(annotations)
+    partial_prec = len(partial_match_df[['group_num', 'occ_num']].drop_duplicates())/n_patterns
+    partial_rec = len(partial_match_df[['group_num', 'occ_num']].drop_duplicates())/len(annotations)
 
     # full match
-    full_prec = len(full_match_df)/n_patterns
-    full_rec = len(full_match_df)/len(annotations)
+    full_prec = len(full_match_df[['group_num', 'occ_num']].drop_duplicates())/n_patterns
+    full_rec = len(full_match_df[['group_num', 'occ_num']].drop_duplicates())/len(annotations)
 
     # full exact match
-    full_ex_prec = len(full_match_exact_df)/n_patterns
-    full_ex_rec = len(full_match_exact_df)/len(annotations)
+    full_ex_prec = len(full_match_exact_df[['group_num', 'occ_num']].drop_duplicates())/n_patterns
+    full_ex_rec = len(full_match_exact_df[['group_num', 'occ_num']].drop_duplicates())/len(annotations)
 
     # groups with a partial match
     group_partial_prec = partial_match_df['group_num'].nunique()/n_groups
@@ -199,15 +199,15 @@ def load_annotations_new(annotations_path):
 
 
 def evaluate_all_tiers(annotations, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=0.3):
-    annotations_short_motif = annotations[annotations['tier']=='short_motif']
+    #annotations_short_motif = annotations[annotations['tier']=='short_motif']
     annotations_motif = annotations[annotations['tier']=='motif']
     annotations_phrase = annotations[annotations['tier']=='phrase']
 
     annotations = evaluate_annotations(annotations, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=partial_perc)
     metrics_orig = get_metrics(annotations, starts_sec_exc, '_all')
 
-    annotations_short_motif = evaluate_annotations(annotations_short_motif, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=partial_perc)
-    metrics_short_motif = get_metrics(annotations_short_motif, starts_sec_exc, '_short_motif')
+    #annotations_short_motif = evaluate_annotations(annotations_short_motif, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=partial_perc)
+    #metrics_short_motif = get_metrics(annotations_short_motif, starts_sec_exc, '_short_motif')
 
     annotations_motif = evaluate_annotations(annotations_motif, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=partial_perc)
     metrics_motif = get_metrics(annotations_motif, starts_sec_exc, '_motif')
@@ -217,7 +217,7 @@ def evaluate_all_tiers(annotations, starts_sec_exc, lengths_sec_exc, eval_tol, p
 
     all_metrics = {}
     all_metrics.update(metrics_orig)
-    all_metrics.update(metrics_short_motif)
+    #sall_metrics.update(metrics_short_motif)
     all_metrics.update(metrics_motif)
     all_metrics.update(metrics_phrase)
 
@@ -246,12 +246,6 @@ def evaluation_report(metrics):
     full_match_recall_all = metrics['full_match_recall_all']
     partial_group_precision_all = metrics['partial_group_precision_all']
     full_group_precision_all = metrics['full_group_precision_all']
-    partial_match_precision_short_motif = metrics['partial_match_precision_short_motif']
-    partial_match_recall_short_motif = metrics['partial_match_recall_short_motif']
-    full_match_precision_short_motif = metrics['full_match_precision_short_motif']
-    full_match_recall_short_motif = metrics['full_match_recall_short_motif']
-    partial_group_precision_short_motif = metrics['partial_group_precision_short_motif']
-    full_group_precision_short_motif = metrics['full_group_precision_short_motif']
     partial_match_precision_motif = metrics['partial_match_precision_motif']
     partial_match_recall_motif = metrics['partial_match_recall_motif']
     full_match_precision_motif = metrics['full_match_precision_motif']
@@ -266,11 +260,9 @@ def evaluation_report(metrics):
     full_group_precision_phrase = metrics['full_group_precision_phrase']
 
     full_exact_match_precision_motif = metrics['full_exact_match_precision_motif']
-    full_exact_match_precision_short_motif = metrics['full_exact_match_precision_short_motif']
     full_exact_match_precision_phrase = metrics['full_exact_match_precision_phrase']
     full_exact_match_precision_all = metrics['full_exact_match_precision_all']
     full_exact_match_recall_motif = metrics['full_exact_match_recall_motif']
-    full_exact_match_recall_short_motif = metrics['full_exact_match_recall_short_motif']
     full_exact_match_recall_phrase = metrics['full_exact_match_recall_phrase']
     full_exact_match_recall_all = metrics['full_exact_match_recall_all']
 
@@ -284,40 +276,54 @@ def evaluation_report(metrics):
     print('Recall -  what proportion of annotated patterns are identified')
     print('======')
     print(f'Full exact match: {round(full_exact_match_recall_all*100, 1)}%')
-    print(f'    - short motif: {round(full_exact_match_recall_short_motif*100, 1)}%')
     print(f'    - motif: {round(full_exact_match_recall_motif*100, 1)}%')
     print(f'    - phrase: {round(full_exact_match_recall_phrase*100, 1)}%')
     print(f'Full match: {round(full_match_recall_all*100, 1)}%')
-    print(f'    - short motif: {round(full_match_recall_short_motif*100, 1)}%')
     print(f'    - motif: {round(full_match_recall_motif*100, 1)}%')
     print(f'    - phrase: {round(full_match_recall_phrase*100, 1)}%')
     print(f'Partial match: {round(partial_match_recall_all*100, 1)}%')
-    print(f'    - short motif: {round(partial_match_recall_short_motif*100, 1)}%')
     print(f'    - motif: {round(partial_match_recall_motif*100, 1)}%')
     print(f'    - phrase: {round(partial_match_recall_phrase*100, 1)}%')
     print('')
     print('Precision - what proportion of identified patterns are annotated')
     print('=========')
     print(f'Full exact match: {round(full_exact_match_precision_all*100, 1)}%')
-    print(f'    - short motif: {round(full_exact_match_precision_short_motif*100, 1)}%')
     print(f'    - motif: {round(full_exact_match_precision_motif*100, 1)}%')
     print(f'    - phrase: {round(full_exact_match_precision_phrase*100, 1)}%')
     print(f'Full match: {round(full_match_precision_all*100, 1)}%')
-    print(f'    - short motif: {round(full_match_precision_short_motif*100, 1)}%')
     print(f'    - motif: {round(full_match_precision_motif*100, 1)}%')
     print(f'    - phrase: {round(full_match_precision_phrase*100, 1)}%')
     print(f'Partial match: {round(partial_match_precision_all*100, 1)}%')
-    print(f'    - short motif: {round(partial_match_precision_short_motif*100, 1)}%')
     print(f'    - motif: {round(partial_match_precision_motif*100, 1)}%')
     print(f'    - phrase: {round(partial_match_precision_phrase*100, 1)}%')
     print('')
     print('Group Precision - what proportion of groups contain at least one annotated pattern')
     print('===============')
     print(f'Full match: {round(full_group_precision_all*100, 1)}%')
-    print(f'    - short motif: {round(full_group_precision_short_motif*100, 1)}%')
     print(f'    - motif: {round(full_group_precision_motif*100, 1)}%')
     print(f'    - phrase: {round(full_group_precision_phrase*100, 1)}%')
     print(f'Partial match: {round(partial_group_precision_all*100, 1)}%')
-    print(f'    - short motif: {round(partial_group_precision_short_motif*100, 1)}%')
     print(f'    - motif: {round(partial_group_precision_motif*100, 1)}%')
     print(f'    - phrase: {round(partial_group_precision_phrase*100, 1)}%')
+
+
+
+def evaluate_quick(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc):
+    annotations_tagged = evaluate_annotations(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=partial_perc)
+    annotations_motif = annotations_tagged[annotations_tagged['tier']=='motif']
+    annotations_phrase = annotations_tagged[annotations_tagged['tier']=='phrase']
+
+    n_patterns = sum([len(g) for g in starts_sec_exc])
+    recall_all = sum((annotations_tagged['match']!='no match').values)/len(annotations_tagged)
+    recall_motif = sum((annotations_motif['match']!='no match').values)/len(annotations_motif)
+    recall_phrase = sum((annotations_phrase['match']!='no match').values)/len(annotations_phrase)
+
+    precision_all = len(annotations_tagged[annotations_tagged['group_num'].notnull()][['group_num', 'occ_num']].drop_duplicates())/n_patterns
+
+    print(f'Recall (All): {round(recall_all,2)}')
+    print(f'Precision (All): {round(precision_all,2)}')
+
+    print(f'Recall (Motif): {round(recall_motif,2)}')
+    print(f'Recall (Phrase): {round(recall_phrase,2)}')
+    
+    return annotations_tagged

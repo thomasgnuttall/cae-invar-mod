@@ -1,7 +1,9 @@
 %load_ext autoreload
 %autoreload 2
 
+import datetime
 import os
+import pickle
 
 import skimage.io
 
@@ -20,7 +22,7 @@ from exploration.sequence import (
     apply_exclusions, contains_silence, min_gap, too_stable, 
     convert_seqs_to_timestep, get_stability_mask, add_center_to_mask,
     remove_below_length)
-from exploration.evaluation import load_annotations_new, evaluate_all_tiers, evaluation_report, get_coverage
+from exploration.evaluation import evaluate_quick, load_annotations_new, evaluate_all_tiers, evaluation_report, get_coverage
 from exploration.visualisation import plot_all_sequences, plot_pitch
 from exploration.io import load_sim_matrix, write_all_sequence_audio, load_yaml
 from exploration.pitch import cents_to_pitch, pitch_seq_to_cents, pitch_to_cents
@@ -113,13 +115,9 @@ min_diff_trav = 0.5
 dupl_perc_overlap = 0.75
 
 # Grouping diagonals
-min_pattern_length_seconds = 1.8
+min_pattern_length_seconds = 1
 min_length_cqt = min_pattern_length_seconds*sr/cqt_window
 min_in_group = 2 # minimum number of patterns to be included in pattern group
-
-# Minimum distance between start points (x,y) to be joined a segment group
-same_seqs_thresh_secs = 0.5
-same_seqs_thresh = int(same_seqs_thresh_secs*sr/cqt_window)
 
 # Exclusions
 exclusion_functions = [contains_silence, min_gap]
@@ -127,7 +125,7 @@ exclusion_functions = [contains_silence, min_gap]
 # Evaluation
 annotations_path = 'annotations/koti_janmani.txt'
 eval_tol = 0.5 # how much leniancy on each side of an annotated pattern before considering it a match (seconds)
-partial_perc = 0.3 # how much overlap does an annotated and identified pattern needed to be considered a partial match
+partial_perc = 0.75 # how much overlap does an annotated and identified pattern needed to be considered a partial match
 
 # Output
 svara_cent_path = "conf/svara_cents.yaml"
@@ -229,8 +227,7 @@ X_binop = apply_bin_op(X_fill, binop_dim)
 if save_imgs:
     skimage.io.imsave(binop_filename, X_binop)
 
-#print('Applying Hough Transform to contours')
-#peaks = hough_transform_new(X_binop, hough_high_angle, hough_low_angle, hough_threshold, filename=hough_filename)
+
 
 ## Join segments that are sufficiently close
 print('Extracting segments using flood fill and centroid')
@@ -240,6 +237,15 @@ all_segments = extract_segments_new(X_binop)
 print(f'    {len(all_segments)} found...')
 t2 = datetime.datetime.now()
 print(f"time taken: {t2-t1}")
+
+def save_object(obj, filename):
+    with open(filename, 'wb') as outp:  # Overwrites any existing file.
+        pickle.dump(obj, outp, pickle.HIGHEST_PROTOCOL)
+save_object(all_segments, 'output/all_segments.pkl')
+
+file = open('output/all_segments.pkl','rb')
+all_segments = pickle.load(file)
+
 
 
 print('Breaking segments with stable regions')
@@ -258,8 +264,58 @@ print('Reducing Segments')
 all_segments_reduced = remove_short(all_broken_segments, min_length_cqt)
 print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pattern_length_seconds}s...')
 
+
+
+
+# join segments that are sufficiently close to each other (if they are small)
+# remove diagonal from returned patterns
+all_segments_reduced = [((x0,y0), (x1,y1)) for ((x0,y0), (x1,y1)) in all_segments_reduced if not ((y0-100 < x0 < y0+100) or (x0-100 < y0 < x0+100))]
+print(f'    {len(all_segments_reduced)} segments not along diagonal')
+# remove duplicates properly
+
+
+
+
+
 print('Grouping Segments')
-all_groups = group_segments(all_segments_reduced, perc_overlap=dupl_perc_overlap)
+from exploration.segments import get_matches_dict, remove_group_duplicates
+
+matches_dict, segment_ix = get_matches_dict(all_segments_reduced, min_length_cqt)
+
+all_groups = []
+c=0
+for i, matches in matches_dict.items():
+    this_group = list(set([i] + matches))
+    for j,ag in enumerate(all_groups):
+        if set(this_group).intersection(set(ag)):
+            # group exists, append
+            all_groups[j] += this_group
+            c = 1
+            break
+    if c==0:
+        # group doesnt exist yet
+        all_groups.append(this_group)
+    c=0
+
+all_groups = [list(set(g)) for g in all_groups]
+
+all_groups = [[segment_ix[i] for i in ag] for ag in all_groups]
+all_groups  = [[((x0,x1),(y0,y1)) for ((x0,y0),(x1,y1)) in ag] for ag in all_groups]
+all_groups  = [sorted([x for y in ag for x in y]) for ag in all_groups]
+
+#no_dupl_groups = []
+#for g in all_groups:
+#    this_group = []
+#    for i in range(1,len(this_group)):
+#        if same_pattern(this_group[i], this_group[-i]
+
+all_groups = [remove_group_duplicates(g, 0.75) for g in all_groups]
+all_groups = [sorted(ag, key=lambda y:y[0]) for ag in all_groups]
+
+
+
+
+#all_groups = group_segments(all_segments_reduced, perc_overlap=0.95)
 print(f'    {len(all_groups)} groups found...')
 
 print('Convert sequences to pitch track timesteps')
@@ -284,20 +340,31 @@ if s1:
 else:
     annotations_filt = annotations_orig
 
-metrics, annotations_tag = evaluate_all_tiers(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc)
+annotations_filt = annotations_filt[annotations_filt['tier']!='short_motif']
+#metrics, annotations_tag = evaluate_all_tiers(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc)
 print('')
+n_patterns = sum([len(x) for x in starts_sec_exc])
 coverage = get_coverage(pitch, starts_seq_exc, lengths_seq_exc)
-print(f'Coverage: {coverage}')
-evaluation_report(metrics)
+print(f'Number of Patterns: {n_patterns}')
+print(f'Number of Groups: {len(starts_sec_exc)}')
+print(f'Coverage: {round(coverage,2)}')
+#evaluation_report(metrics)
+annotations_tagged = evaluate_quick(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc)
+
+
+
+
+
+
 
 
 ############
 ## Output ##
 ############
 print('Writing all sequences')
-plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_hough', clear_dir=True, plot_kwargs=plot_kwargs)
-write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_hough')
-annotations_tag.to_csv('output/new_hough/annotations.csv', index=False)
+plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_group', clear_dir=True, plot_kwargs=plot_kwargs)
+write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_group')
+annotations_tagged.to_csv('output/new_group/annotations.csv', index=False)
 
 
 
@@ -357,6 +424,8 @@ write_all_sequence_audio(audio_path, start_single, len_single, timestep, 'output
 #####################################################
 ## Plotting annotations and Results on Sim Matrix  ##
 #####################################################
+import matplotlib.image
+
 def add_line_to_plot(arr, x0, x1, y0, y1):
     
     length = int(np.hypot(x1-x0, y1-y0))
@@ -427,46 +496,8 @@ def add_patterns_to_plot(arr, patterns, lengths, sr, cqt_window):
 def add_segments_to_plot(arr, segments):
     arr_ = arr.copy()
     for i, ((x0, y0), (x1, y1)) in enumerate(segments):
-        if x1 >= n:
-            print(i)
-        if y1 >= n:
-            print(i)
         arr_ = add_line_to_plot(arr_, int(x0), int(x1), int(y0), int(y1))
     return arr_
-
-
-
-X_canvas = X.copy()
-X_canvas[:] = 0
-
-samp1 = 5000
-samp2 = 9000
-
-# Orig matrix
-X_orig = X.copy()[samp1:samp2,samp1:samp2]
-#skimage.io.imsave('images/sim_mat.png', X_orig)
-
-# Annotations
-X_annotate = add_annotations_to_plot(X_canvas, annotations_orig, sr, cqt_window)
-X_annotate_samp = X_annotate.copy()[samp1:samp2,samp1:samp2]
-#skimage.io.imsave('images/annotations_sim_mat.png', X_annotate_samp)
-
-# Found segments from image processing
-X_segments = add_segments_to_plot(X_canvas, test)
-X_segments_samp = X_segments.copy()[samp1:samp2,samp1:samp2]
-#skimage.io.imsave('images/segments_sim_mat.png', X_segments_samp)
-
-# Found segments broken from image processing
-X_segments = add_segments_to_plot(X_canvas, all_segments_reduced)
-X_segments_samp = X_segments.copy()[samp1:samp2,samp1:samp2]
-#skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments_samp)
-
-# Patterns from full pipeline
-X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr, cqt_window)
-X_patterns_samp = X_patterns.copy()[samp1:samp2,samp1:samp2]
-#skimage.io.imsave('images/patterns_sim_mat.png', X_patterns_samp)
-
-import matplotlib.image
 
 def join_plots(A, B, both_binary=True):
 
@@ -490,11 +521,37 @@ def join_plots(A, B, both_binary=True):
     return rgb
 
 
+
+X_canvas = X.copy()
+X_canvas[:] = 0
+
+samp1 = 5000
+samp2 = 9000
+
+# Orig matrix
+X_orig = X.copy()[samp1:samp2,samp1:samp2]
+
+# Annotations
+X_annotate = add_annotations_to_plot(X_canvas, annotations_orig, sr, cqt_window)
+
+# Found segments from image processing
+X_segments = add_segments_to_plot(X_canvas, all_segments)
+
+# Found segments broken from image processing
+X_segments_reduced = add_segments_to_plot(X_canvas, all_segments_reduced)
+
+# Patterns from full pipeline
+X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr, cqt_window)
+
+
 X_joined = join_plots(X_orig, X_canvas[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/0_self_sim.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_segments[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/1_self_sim_segments.png', X_joined.astype(np.uint8))
+
+X_joined = join_plots(X_orig, X_segments_reduced[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/1_self_sim_segments_reduced.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_binop[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/2_self_sim_binop.png', X_joined.astype(np.uint8))
@@ -504,6 +561,9 @@ matplotlib.image.imsave('images/3_self_sim_annotate.png', X_joined.astype(np.uin
 
 X_joined = join_plots(X_annotate[samp1:samp2,samp1:samp2], X_patterns[samp1:samp2,samp1:samp2])
 matplotlib.image.imsave('images/4_annotations_patterns.png', X_joined.astype(np.uint8))
+
+X_joined = join_plots(X_orig, X_patterns[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/5_self_sim_patterns.png', X_joined.astype(np.uint8))
 
 
 

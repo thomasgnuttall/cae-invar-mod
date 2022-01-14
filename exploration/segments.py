@@ -395,15 +395,24 @@ def break_all_segments(all_segments, mask, cqt_window, sr, timestep):
     return sorted([sorted(x) for x in all_broken_segments])
 
 
-def do_patterns_overlap(x0, x1, y0, y1, perc_overlap):
+def get_overlap(x0, x1, y0, y1):
     
     p0_indices = set(range(x0, x1+1))
     p1_indices = set(range(y0, y1+1))
     
-    o1 = len(p1_indices.intersection(p0_indices))/len(p0_indices)>perc_overlap
-    o2 = len(p1_indices.intersection(p0_indices))/len(p1_indices)>perc_overlap
+    inters = p1_indices.intersection(p0_indices)
+
+    o1 = len(inters)/len(p0_indices)
+    o2 = len(inters)/len(p1_indices)
     
-    return o1 and o2
+    return o1, o2
+
+
+def do_patterns_overlap(x0, x1, y0, y1, perc_overlap):
+    
+    o1, o2 = get_overlap(x0, x1, y0, y1)
+
+    return o1>perc_overlap and o2>perc_overlap
 
 
 def do_segments_overlap(seg1, seg2, perc_overlap=0.5):
@@ -485,7 +494,7 @@ def remove_short(all_segments, min_length_cqt):
     for (x0, y0), (x1, y1) in all_segments:
         length1 = x1 - x0
         length2 = y1 - y0
-        if any([length1>min_length_cqt, length2>min_length_cqt]):
+        if all([length1>min_length_cqt, length2>min_length_cqt]):
             long_segs.append([(x0, y0), (x1, y1)])
     return long_segs
 
@@ -617,7 +626,7 @@ def group_segments(all_segments, perc_overlap):
         all_groups.append(this_group)
 
     rgd = [remove_group_duplicates(g, perc_overlap) for g in all_groups]
-    
+
     return rgd
 
 
@@ -736,6 +745,161 @@ def group_and_fill_hough(X, peaks, filename):
     return X_merg, averaged_peaks
 
 
+def update_dict(d, k, v):
+    if k in d:
+        d[k].append(v)
+    else:
+        d[k] = [v]
+
+
+def get_matches_dict(all_segments_reduced, min_length_cqt):
+    # to be sure to be sure
+    all_seg_copy = all_segments_reduced.copy()
+
+    matches_dict = {}
+
+    # create unique indice for every segment
+    segment_ix = {k:v for k,v in enumerate(all_seg_copy)}
+    max_ix = max(segment_ix.keys())
+    
+    for i in range(max_ix+1):
+
+        # Original segment for this loop, we want to 
+        # find all others that intersect with it
+        (x0, y0), (x1, y1) = segment_ix[i]
+
+        ##################################################################################
+        ### Identifying segments in the horizontal and vertical limits of this segment ###
+        ##################################################################################
+        # Find all segments that intersect in the horizontal/vertical direction
+        #
+        #
+        #
+        # horiz_segs/vert_segs format...
+        #   (j, [(x0, y0), (x1, y1)], overlap_orig, overlap_return)
+        #
+        # where j is the index of the returned segment
+        #
+        # and   [(hx0, hy0), (hx1, hy1)] are the segment coords of
+        #       the returned segment
+        #
+        # and   overlap_orig is the proportion of the original segment that
+        #       overlaps (the one this loop is for)
+        #
+        # and   overlap_return is the proportion of the returned segment that
+        #       overlaps (the one returned by list comprehension)
+        horiz_segs = []
+        vert_segs = []
+        for j, [(x0_, y0_), (x1_, y1_)] in segment_ix.items():
+
+            # get horizontal overlap
+            ho1, ho2 = get_overlap(y0, y1, y0_, y1_)
+
+            # get vertical overlap
+            vo1, vo2 = get_overlap(x0, x1, x0_, x1_)
+            
+            if all([ho1, ho2]):
+                horiz_segs.append((j, [(x0_, y0_), (x1_, y1_)], ho1, ho2))
+
+            if all([vo1, vo2]):
+                vert_segs.append((j, [(x0_, y0_), (x1_, y1_)], vo1, vo2))
+
+        ###########################
+        ### Identifying matches ###
+        ###########################
+        # For comparing segments, (------) and [-------]
+        # There are three types of match...
+        #   1. Overlap almost 100 percent on each side (-[-------)-]
+                # - Return both in group unaltered
+        #   2. Large overlap and considerable pattern outside overlap (-[-------)-------------] or (---------[-------)-------------]
+                # - Create new segment for overlapping part
+                #   the non overlapping part will be handled 
+                #   on their own iteration
+        #   3. Overlap is less than minimum sequence length (--------[-)-----------]
+                # - Do not consider match, no grouping, no further segments
+                #   made.
+
+        for h_seg in horiz_segs:
+            j, [(x0_, y0_), (x1_, y1_)], o1, o2 = h_seg
+
+            # using y's here because we are in the horizontal band
+            l = y1 - y0 # length of orig seq
+            l_ = y1_ - y0_ # length of matched seq
+
+            # overlap in time cqt_windows
+            o1s = o1*l
+            o2s = o2*l_
+
+            # non intersecting part in cqt_windows
+            no1s = l_ - o1s
+            no2s = l_ - o2s
+
+            # match types (see comment above)
+            type_1 = o1s >= min_length_cqt and \
+                     o2s >= min_length_cqt and \
+                     no1s < min_length_cqt and \
+                     no2s < min_length_cqt
+
+            type_2 = o1s >= min_length_cqt and \
+                     o2s >= min_length_cqt and \
+                     (no1s >= min_length_cqt or no2s >= min_length_cqt)
+
+            type_3 = o1s < min_length_cqt and \
+                     o2s < min_length_cqt and \
+                     no1s < min_length_cqt and \
+                     no2s < min_length_cqt
+
+            if type_1:
+                # record match, no further action
+                update_dict(matches_dict, i, j)
+                update_dict(matches_dict, j, i)
+
+            if type_2:
+                # create new segment from overlapping part
+                # TODO: this bit
+                pass
+
+        for v_seg in vert_segs:
+            j, [(x0_, y0_), (x1_, y1_)], o1, o2 = v_seg
+
+            # using x's here because we are in the vertical band
+            l = x1 - x0 # length of orig seq
+            l_ = x1_ - x0_ # length of matched seq
+
+            # overlap in time cqt_windows
+            o1s = o1*l
+            o2s = o2*l_
+
+            # non intersecting part in cqt_windows
+            no1s = l - o1s
+            no2s = l_ - o2s
+
+            # match types (see comment above)
+            type_1 = o1s >= min_length_cqt and \
+                     o2s >= min_length_cqt and \
+                     no1s < min_length_cqt and \
+                     no2s < min_length_cqt
+
+            type_2 = o1s >= min_length_cqt and \
+                     o2s >= min_length_cqt and \
+                     (no1s >= min_length_cqt or no2s >= min_length_cqt)
+
+            type_3 = o1s < min_length_cqt and \
+                     o2s < min_length_cqt and \
+                     no1s < min_length_cqt and \
+                     no2s < min_length_cqt
+
+            if type_1:
+                # record match, no further action
+                update_dict(matches_dict, i, j)
+                update_dict(matches_dict, j, i)
+
+            if type_2:
+                # create new segment from overlapping part
+                # TODO: this bit
+                pass
+
+    return matches_dict, segment_ix
 
 
 
