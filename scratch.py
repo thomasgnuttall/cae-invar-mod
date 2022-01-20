@@ -44,7 +44,7 @@ sim_path = 'output/full_dataset/Koti Janmani.multitrack-vocal.mp3.npy'
 sr = 44100
 
 # size in frames of cqt window from convolution model
-cqt_window = 1988 # was previously set to 1984
+cqt_window = 1988 # was previously set to 1988
 
 # Take sample of data, set to None to use all data
 s1 = None # lower bound index (5000 has been used for testing)
@@ -115,12 +115,12 @@ min_diff_trav = 0.5
 dupl_perc_overlap = 0.75
 
 # Grouping diagonals
-min_pattern_length_seconds = 1
+min_pattern_length_seconds = 1.5
 min_length_cqt = min_pattern_length_seconds*sr/cqt_window
 min_in_group = 2 # minimum number of patterns to be included in pattern group
 
 # Exclusions
-exclusion_functions = [contains_silence, min_gap]
+exclusion_functions = [contains_silence]
 
 # Evaluation
 annotations_path = 'annotations/koti_janmani.txt'
@@ -224,9 +224,11 @@ X_fill = edges_to_contours(X_ext, etc_kernel_size)
 print('Cleaning isolated non-directional regions using morphological opening')
 X_binop = apply_bin_op(X_fill, binop_dim)
 
+print('Ensuring symmetry between upper and lower triangle in array')
+X_binop = make_symmetric(X_binop)
+
 if save_imgs:
     skimage.io.imsave(binop_filename, X_binop)
-
 
 
 ## Join segments that are sufficiently close
@@ -243,23 +245,25 @@ def save_object(obj, filename):
         pickle.dump(obj, outp, pickle.HIGHEST_PROTOCOL)
 save_object(all_segments, 'output/all_segments.pkl')
 
+
+import pickle
 file = open('output/all_segments.pkl','rb')
 all_segments = pickle.load(file)
 
 
 
-print('Breaking segments with stable regions')
-# Format - [[(x,y), (x1,y1)],...]
-all_broken_segments = break_all_segments(all_segments, stable_mask, cqt_window, sr, timestep)
-print(f'    {len(all_broken_segments)} broken segments...')
 
-print('Breaking segments with silent regions')
+
+
+silence_and_stable_mask = np.array([int(any([i,j])) for i,j in zip(silence_mask, stable_mask)])
+
+
+print('Breaking segments with silent/stable regions')
 # Format - [[(x,y), (x1,y1)],...]
-all_broken_segments = break_all_segments(all_broken_segments, silence_mask, cqt_window, sr, timestep)
+all_broken_segments = break_all_segments(all_segments, silence_and_stable_mask, cqt_window, sr, timestep)
 print(f'    {len(all_broken_segments)} broken segments...')
 
 #[(i,((x0,y0), (x1,y1))) for i,((x0,y0), (x1,y1)) in enumerate(all_segments) if x1-x0>10000]
-
 print('Reducing Segments')
 all_segments_reduced = remove_short(all_broken_segments, min_length_cqt)
 print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pattern_length_seconds}s...')
@@ -267,50 +271,83 @@ print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pa
 
 
 
-# join segments that are sufficiently close to each other (if they are small)
-# remove diagonal from returned patterns
-all_segments_reduced = [((x0,y0), (x1,y1)) for ((x0,y0), (x1,y1)) in all_segments_reduced if not ((y0-100 < x0 < y0+100) or (x0-100 < y0 < x0+100))]
-print(f'    {len(all_segments_reduced)} segments not along diagonal')
-# remove duplicates properly
 
+
+
+
+
+from exploration.segments import *
+
+all_segs = all_segments_reduced
+
+# sort by shortest -> longest
+ordered_segments = sorted(all_segs, key=lambda y: y[1][0]-y[0][0])
+
+types_dict = {i:0 for i in range(1,10)}
+matches_dict = {}
+all_new_segs = []
+
+# connect segments based on symmetry
+for i, ((x0, y0), (x1, y1)) in enumerate(ordered_segments):
+    # x0==y0 and x1==y1
+    this = [j for j,x in enumerate(ordered_segments) if x0==x[0][1] and x1==x[1][1]]
+    for t in this:
+        update_dict(matches_dict, i, t)
+        update_dict(matches_dict, t, i)
+    # match segment with itself
+    update_dict(matches_dict, i, i)
+
+# to indicate whether a segment has been grouped
+used = [0]*len(ordered_segments)
+
+# For when we create new segments
+max_i = len(ordered_segments)-1
+
+
+import tqdm
+for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(ordered_segments))):
+    for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(ordered_segments):
+        # horizontal pass
+        res = compare_segments(Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict)
+        all_new_segs, max_i, matches_dict = res
+
+        # vertical pass (swap xs and ys)
+        res2 = compare_segments(Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, all_new_segs, max_i, matches_dict)
+        all_new_segs, max_i, matches_dict = res2
+
+
+old_and_new_segs = {i:((x0,y0), (x1,y1)) for i,((x0,y0), (x1,y1)) in enumerate(ordered_segments + all_new_segs) if is_good_segment(x0, y0, x1, y1, 0.6, silence_and_stable_mask, cqt_window, timestep, sr)}
+
+
+
+
+# join segments that are sufficiently close to each other (if they are small)
+# extend segments to silence
+# remove diagonal from returned patterns
+#all_segments_reduced = [((x0,y0), (x1,y1)) for ((x0,y0), (x1,y1)) in all_segments_reduced if not ((y0-100 < x0 < y0+100) or (x0-100 < y0 < x0+100))]
+#print(f'    {len(all_segments_reduced)} segments not along diagonal')
+# remove duplicates properly
+# within group alignment using dtw
 
 
 
 
 print('Grouping Segments')
-from exploration.segments import get_matches_dict, remove_group_duplicates
+all_groups = matches_dict_to_groups(matches_dict)
+check_groups_unique(all_groups)
 
-matches_dict, segment_ix = get_matches_dict(all_segments_reduced, min_length_cqt)
 
-all_groups = []
-c=0
-for i, matches in matches_dict.items():
-    this_group = list(set([i] + matches))
-    for j,ag in enumerate(all_groups):
-        if set(this_group).intersection(set(ag)):
-            # group exists, append
-            all_groups[j] += this_group
-            c = 1
-            break
-    if c==0:
-        # group doesnt exist yet
-        all_groups.append(this_group)
-    c=0
-
-all_groups = [list(set(g)) for g in all_groups]
-
-all_groups = [[segment_ix[i] for i in ag] for ag in all_groups]
+all_groups = [[old_and_new_segs[i] for i in ag if i in old_and_new_segs] for ag in all_groups]
 all_groups  = [[((x0,x1),(y0,y1)) for ((x0,y0),(x1,y1)) in ag] for ag in all_groups]
 all_groups  = [sorted([x for y in ag for x in y]) for ag in all_groups]
 
-#no_dupl_groups = []
-#for g in all_groups:
-#    this_group = []
-#    for i in range(1,len(this_group)):
-#        if same_pattern(this_group[i], this_group[-i]
-
-all_groups = [remove_group_duplicates(g, 0.75) for g in all_groups]
+all_groups = [remove_group_duplicates(g, 0.50) for g in all_groups]
 all_groups = [sorted(ag, key=lambda y:y[0]) for ag in all_groups]
+
+# sort groups
+all_groups = [sorted(arr, key=lambda y: y[0]) for arr in all_groups]
+all_groups = sorted(all_groups, key=lambda y: -len(y))
+all_groups = [x for x in all_groups if len(x) > 0]
 
 
 
@@ -424,103 +461,7 @@ write_all_sequence_audio(audio_path, start_single, len_single, timestep, 'output
 #####################################################
 ## Plotting annotations and Results on Sim Matrix  ##
 #####################################################
-import matplotlib.image
-
-def add_line_to_plot(arr, x0, x1, y0, y1):
-    
-    length = int(np.hypot(x1-x0, y1-y0))
-    x, y = np.linspace(x0, x1, length), np.linspace(y0, y1, length)
-    x = x.astype(int)
-    y = y.astype(int)
-
-    arr[x, y] = 100
-
-    return arr
-
-
-def get_lines(s1, s2):
-    n = len(s1)
-    all_lines = []
-    for i in range(n):
-        x0 = s1[i]
-        x1 = s2[i]
-        for j in range(n):
-            if j==i:
-                continue
-            y0 = s1[j]
-            y1 = s2[j]
-            all_lines.append((x0, x1, y0, y1))
-    return all_lines
-
-
-def add_annotations_to_plot(arr, annotations, sr, cqt_window):
-    arr_ = arr.copy()
-    annotations_grouped = annotations.groupby('text')['s1']\
-                                          .apply(list)\
-                                          .reset_index()
-
-    annotations_grouped['s2'] = annotations.groupby('text')['s2']\
-                                                .apply(list)\
-                                                .reset_index()['s2']
-    
-    for i, row in annotations_grouped.iterrows():
-        s1 = row['s1']
-        s2 = row['s2']
-        these_lines = get_lines(s1, s2)
-        for x0, x1, y0, y1 in these_lines:
-            arr_ = add_line_to_plot(
-                arr_, int(x0*sr/cqt_window), int(x1*sr/cqt_window), 
-                int(y0*sr/cqt_window), int(y1*sr/cqt_window))
-
-    return arr_
-
-
-def add_patterns_to_plot(arr, patterns, lengths, sr, cqt_window):
-    arr_ = arr.copy()
-    
-    for i, group in enumerate(patterns):
-        lens = lengths[i]
-        
-        s1 = group
-        s2 = [g+lens[j] for j,g in enumerate(s1)]
-
-        these_lines = get_lines(s1, s2)
-        for x0, x1, y0, y1 in these_lines:
-            arr_ = add_line_to_plot(
-                arr_, int(x0*sr/cqt_window), int(x1*sr/cqt_window), 
-                int(y0*sr/cqt_window), int(y1*sr/cqt_window))
-
-    return arr_
-
-
-def add_segments_to_plot(arr, segments):
-    arr_ = arr.copy()
-    for i, ((x0, y0), (x1, y1)) in enumerate(segments):
-        arr_ = add_line_to_plot(arr_, int(x0), int(x1), int(y0), int(y1))
-    return arr_
-
-def join_plots(A, B, both_binary=True):
-
-    h,w = A.shape
-    
-    rgb = np.zeros((h,w,3))
-
-    if both_binary:
-        rgb[A>0] = np.array([255,255,255]) # WHITE
-        rgb[B>0] = np.array([255,0,0]) # RED
-
-        x,y = np.where(np.logical_and(A > 1, B > 1))
-        rgb[x,y] = np.array([207, 126, 190]) # PINK
-    else:
-        scaled = ((A - A.min()) / (A.max() - A.min()) )*255
-        rgb[:,:,0] = scaled
-        rgb[:,:,1] = scaled
-        rgb[:,:,2] = scaled
-        rgb[B>0] = np.array([255,0,0]) # RED
-
-    return rgb
-
-
+from exporation.visualisation import add_line_to_plot, get_lines, add_annotations_to_plot, add_patterns_to_plot, add_segments_to_plot, join_plots
 
 X_canvas = X.copy()
 X_canvas[:] = 0
@@ -564,6 +505,13 @@ matplotlib.image.imsave('images/4_annotations_patterns.png', X_joined.astype(np.
 
 X_joined = join_plots(X_orig, X_patterns[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/5_self_sim_patterns.png', X_joined.astype(np.uint8))
+
+
+
+
+
+
+
 
 
 
