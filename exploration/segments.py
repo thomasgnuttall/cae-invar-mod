@@ -620,7 +620,7 @@ def check_groups_unique(all_groups):
     return repl
 
 
-def compare_segments(Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict):
+def compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict):
     """
     # Types of matches for two sequences: 
     #       query (Q):(------) and returned (R):[-------]
@@ -732,230 +732,230 @@ def compare_segments(Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all
         type_8 = all([left_sig, overlap_sig, not right_sig])
         type_9 = all([left_sig, overlap_sig, right_sig])
 
-        if type_3:
-            # record match, no further action
-            update_dict(matches_dict, i, j)
-            update_dict(matches_dict, j, i)
+    if type_3:
+        # record match, no further action
+        update_dict(matches_dict, i, j)
+        update_dict(matches_dict, j, i)
 
-        if type_4:
+    if type_4:
 
-            # Split R into two patterns
-            # that which intersects with
-            # Q....
-            R1x0 = min(overlap_indices)
-            R1x1 = max(overlap_indices)
-            R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
-            R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
-            R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
+        # Split R into two patterns
+        # that which intersects with
+        # Q....
+        R1x0 = min(overlap_indices)
+        R1x1 = max(overlap_indices)
+        R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
+        R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
+        R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
 
-            # And that part which does 
-            # not intersect with Q...
-            R2x0 = min(right_indices)
-            R2x1 = max(right_indices)
-            R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
-            R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
-            R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
-            
-            # Log new R1 seg and group with Q
-            max_i += 1
-            all_new_segs.append(R1_seg)
-            update_dict(matches_dict, i, max_i)
-            update_dict(matches_dict, max_i, i)
-            
-            # Log new R2 seg
-            max_i += 1
-            all_new_segs.append(R2_seg)
+        # And that part which does 
+        # not intersect with Q...
+        R2x0 = min(right_indices)
+        R2x1 = max(right_indices)
+        R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
+        R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
+        R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
+        
+        # Log new R1 seg and group with Q
+        max_i += 1
+        all_new_segs.append(R1_seg)
+        update_dict(matches_dict, i, max_i)
+        update_dict(matches_dict, max_i, i)
+        
+        # Log new R2 seg
+        max_i += 1
+        all_new_segs.append(R2_seg)
 
-        if type_5:
+    if type_5:
 
-            # Split Q into two patterns
-            # that which does not intersects
-            # with R....
-            Q1x0 = min(left_indices)
-            Q1x1 = max(left_indices)
-            Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
-            Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
-            Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
+        # Split Q into two patterns
+        # that which does not intersects
+        # with R....
+        Q1x0 = min(left_indices)
+        Q1x1 = max(left_indices)
+        Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
+        Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
+        Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
 
-            # And that part which does 
-            # intersect with R...
-            Q2x0 = min(overlap_indices)
-            Q2x1 = max(overlap_indices)
-            Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
-            Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
-            Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1))
-            
-            # Log new Q2 seg and group with R
-            max_i += 1
-            all_new_segs.append(Q2_seg)
-            update_dict(matches_dict, j, max_i)
-            update_dict(matches_dict, max_i, j)
-            
-            # Log new Q1 seg
-            max_i += 1
-            all_new_segs.append(Q1_seg)
+        # And that part which does 
+        # intersect with R...
+        Q2x0 = min(overlap_indices)
+        Q2x1 = max(overlap_indices)
+        Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
+        Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
+        Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1))
+        
+        # Log new Q2 seg and group with R
+        max_i += 1
+        all_new_segs.append(Q2_seg)
+        update_dict(matches_dict, j, max_i)
+        update_dict(matches_dict, max_i, j)
+        
+        # Log new Q1 seg
+        max_i += 1
+        all_new_segs.append(Q1_seg)
 
-        if type_6:
-            
-            # Split Q into two patterns
-            # that which does not intersect
-            #  with R....
-            Q1x0 = min(left_indices)
-            Q1x1 = max(left_indices)
-            Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
-            Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
-            Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
+    if type_6:
+        
+        # Split Q into two patterns
+        # that which does not intersect
+        #  with R....
+        Q1x0 = min(left_indices)
+        Q1x1 = max(left_indices)
+        Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
+        Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
+        Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
 
-            # And that part which does 
-            # intersect with R...
-            Q2x0 = min(overlap_indices)
-            Q2x1 = max(overlap_indices)
-            Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
-            Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
-            Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1)) 
+        # And that part which does 
+        # intersect with R...
+        Q2x0 = min(overlap_indices)
+        Q2x1 = max(overlap_indices)
+        Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
+        Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
+        Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1)) 
 
-            # Split R into two patterns
-            # that which intersects with
-            # Q....
-            R1x0 = min(overlap_indices)
-            R1x1 = max(overlap_indices)
-            R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
-            R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
-            R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
+        # Split R into two patterns
+        # that which intersects with
+        # Q....
+        R1x0 = min(overlap_indices)
+        R1x1 = max(overlap_indices)
+        R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
+        R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
+        R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
 
-            # And that part which does 
-            # not intersect with Q...
-            R2x0 = min(right_indices)
-            R2x1 = max(right_indices)
-            R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
-            R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
-            R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
+        # And that part which does 
+        # not intersect with Q...
+        R2x0 = min(right_indices)
+        R2x1 = max(right_indices)
+        R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
+        R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
+        R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
 
-            # Log new Q2/R1 seg and group
-            max_i += 1
-            all_new_segs.append(Q2_seg)
-            update_dict(matches_dict, max_i, max_i+1)
-            update_dict(matches_dict, max_i+1, max_i)
-            max_i += 1
-            all_new_segs.append(R1_seg)
-            
-            # Log new Q1 seg
-            max_i += 1
-            all_new_segs.append(Q1_seg)
-            
-            # log new R2 seg
-            max_i += 1
-            all_new_segs.append(R2_seg)
+        # Log new Q2/R1 seg and group
+        max_i += 1
+        all_new_segs.append(Q2_seg)
+        update_dict(matches_dict, max_i, max_i+1)
+        update_dict(matches_dict, max_i+1, max_i)
+        max_i += 1
+        all_new_segs.append(R1_seg)
+        
+        # Log new Q1 seg
+        max_i += 1
+        all_new_segs.append(Q1_seg)
+        
+        # log new R2 seg
+        max_i += 1
+        all_new_segs.append(R2_seg)
 
-        if type_7:
+    if type_7:
 
-            # Split Q into two patterns
-            # that which intersects with
-            # R....
-            Q1x0 = min(overlap_indices)
-            Q1x1 = max(overlap_indices)
-            Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
-            Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
-            Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
+        # Split Q into two patterns
+        # that which intersects with
+        # R....
+        Q1x0 = min(overlap_indices)
+        Q1x1 = max(overlap_indices)
+        Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
+        Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
+        Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
 
-            # And that part which does 
-            # not intersect with Q...
-            Q2x0 = min(right_indices)
-            Q2x1 = max(right_indices)
-            Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
-            Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
-            Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1))
-            
-            # Log new Q1 seg and group with R
-            max_i += 1
-            all_new_segs.append(Q1_seg)
-            update_dict(matches_dict, j, max_i)
-            update_dict(matches_dict, max_i, j)
-            
-            # Log new Q2 seg
-            max_i += 1
-            all_new_segs.append(Q2_seg)
+        # And that part which does 
+        # not intersect with Q...
+        Q2x0 = min(right_indices)
+        Q2x1 = max(right_indices)
+        Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
+        Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
+        Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1))
+        
+        # Log new Q1 seg and group with R
+        max_i += 1
+        all_new_segs.append(Q1_seg)
+        update_dict(matches_dict, j, max_i)
+        update_dict(matches_dict, max_i, j)
+        
+        # Log new Q2 seg
+        max_i += 1
+        all_new_segs.append(Q2_seg)
 
-        if type_8:
+    if type_8:
 
-            # Split R into two patterns
-            # that which does not intersects
-            # with Q....
-            R1x0 = min(left_indices)
-            R1x1 = max(left_indices)
-            R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
-            R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
-            R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
+        # Split R into two patterns
+        # that which does not intersects
+        # with Q....
+        R1x0 = min(left_indices)
+        R1x1 = max(left_indices)
+        R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
+        R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
+        R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
 
-            # And that part which does 
-            # intersect with Q...
-            R2x0 = min(overlap_indices)
-            R2x1 = max(overlap_indices)
-            R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
-            R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
-            R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
-            
-            # Log new R2 seg and group with Q
-            max_i += 1
-            all_new_segs.append(R2_seg)
-            update_dict(matches_dict, i, max_i)
-            update_dict(matches_dict, max_i, i)
-            
-            # Log new R1 seg
-            max_i += 1
-            all_new_segs.append(R1_seg)
+        # And that part which does 
+        # intersect with Q...
+        R2x0 = min(overlap_indices)
+        R2x1 = max(overlap_indices)
+        R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
+        R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
+        R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
+        
+        # Log new R2 seg and group with Q
+        max_i += 1
+        all_new_segs.append(R2_seg)
+        update_dict(matches_dict, i, max_i)
+        update_dict(matches_dict, max_i, i)
+        
+        # Log new R1 seg
+        max_i += 1
+        all_new_segs.append(R1_seg)
 
-        if type_9:
-            
-            # Split Q into two patterns
-            # that which does not intersect
-            #  with R....
-            Q1x0 = min(right_indices)
-            Q1x1 = max(right_indices)
-            Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
-            Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
-            Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
+    if type_9:
+        
+        # Split Q into two patterns
+        # that which does not intersect
+        #  with R....
+        Q1x0 = min(right_indices)
+        Q1x1 = max(right_indices)
+        Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
+        Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
+        Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
 
-            # And that part which does 
-            # intersect with R...
-            Q2x0 = min(overlap_indices)
-            Q2x1 = max(overlap_indices)
-            Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
-            Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
-            Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1)) 
+        # And that part which does 
+        # intersect with R...
+        Q2x0 = min(overlap_indices)
+        Q2x1 = max(overlap_indices)
+        Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
+        Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
+        Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1)) 
 
-            # Split R into two patterns
-            # that which intersects with
-            # Q....
-            R1x0 = min(overlap_indices)
-            R1x1 = max(overlap_indices)
-            R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
-            R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
-            R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
+        # Split R into two patterns
+        # that which intersects with
+        # Q....
+        R1x0 = min(overlap_indices)
+        R1x1 = max(overlap_indices)
+        R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
+        R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
+        R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
 
-            # And that part which does 
-            # not intersect with Q...
-            R2x0 = min(left_indices)
-            R2x1 = max(left_indices)
-            R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
-            R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
-            R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
+        # And that part which does 
+        # not intersect with Q...
+        R2x0 = min(left_indices)
+        R2x1 = max(left_indices)
+        R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
+        R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
+        R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
 
-            # Log new R2/Q1 seg and group
-            max_i += 1
-            all_new_segs.append(R2_seg)
-            update_dict(matches_dict, max_i, max_i+1)
-            update_dict(matches_dict, max_i+1, max_i)
-            max_i += 1
-            all_new_segs.append(Q1_seg)
-            
-            # Log new R1 seg
-            max_i += 1
-            all_new_segs.append(R1_seg)
-            
-            # log new Q2 seg
-            max_i += 1
-            all_new_segs.append(Q2_seg)
+        # Log new R2/Q1 seg and group
+        max_i += 1
+        all_new_segs.append(R2_seg)
+        update_dict(matches_dict, max_i, max_i+1)
+        update_dict(matches_dict, max_i+1, max_i)
+        max_i += 1
+        all_new_segs.append(Q1_seg)
+        
+        # Log new R1 seg
+        max_i += 1
+        all_new_segs.append(R1_seg)
+        
+        # log new Q2 seg
+        max_i += 1
+        all_new_segs.append(Q2_seg)
     
     return all_new_segs, max_i, matches_dict
 

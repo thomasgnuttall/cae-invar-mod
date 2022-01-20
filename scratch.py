@@ -308,11 +308,11 @@ import tqdm
 for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(ordered_segments))):
     for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(ordered_segments):
         # horizontal pass
-        res = compare_segments(Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict)
+        res = compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict)
         all_new_segs, max_i, matches_dict = res
 
         # vertical pass (swap xs and ys)
-        res2 = compare_segments(Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, all_new_segs, max_i, matches_dict)
+        res2 = compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, all_new_segs, max_i, matches_dict)
         all_new_segs, max_i, matches_dict = res2
 
 
