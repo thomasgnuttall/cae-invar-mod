@@ -1,6 +1,6 @@
 import numpy as np
 
-def contains_silence(seq, thresh=0.05):
+def contains_silence(seq, thresh=0.15):
     """If more than <thresh> of <seq> is 0, return True"""
     return sum(seq==0)/len(seq) > thresh
 

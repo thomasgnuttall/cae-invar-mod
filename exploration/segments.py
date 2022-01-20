@@ -75,6 +75,26 @@ def get_label_indices(X, structure_size=2):
     return label_indices
 
 
+def line_through_points(x0, y0, x1, y1):
+    """
+    return function to convert x->y and for y->x
+    for straight line that passes through x0,y0 and x1,y1
+    """
+    centroids = [(x0,y0), (x1, y1)]
+    x_coords, y_coords = zip(*centroids)
+    
+    # gradient and intercecpt of line passing through centroids
+    A = vstack([x_coords, ones(len(x_coords))]).T
+    m, c = lstsq(A, y_coords, rcond=None)[0]
+
+    # functions for converting between
+    # x and y on that line
+    get_y = lambda xin: m*xin + c
+    get_x = lambda yin: (yin - c)/m
+
+    return get_x, get_y
+
+
 def extract_segments_new(X):
     
     # size of square array
@@ -119,20 +139,10 @@ def extract_segments_new(X):
         west_x  = x_sorted[0][0] # line across left side
         east_x  = x_sorted[-1][0] # line across right side
 
-        # The returned segment will pass through both of these centroids
-        # and terminate at the edges of the bounding box. Using the 
-        # centroids of two quarters accounts for non 45 degree orientation
-        centroids = [tlq_centroid, brq_centroid]
-        x_coords, y_coords = zip(*centroids)
-        
-        # gradient and intercecpt of line passing through centroids
-        A = vstack([x_coords, ones(len(x_coords))]).T
-        m, c = lstsq(A, y_coords, rcond=None)[0]
-
         # functions for converting between
         # x and y on that line
-        get_y = lambda xin: m*xin + c
-        get_x = lambda yin: (yin - c)/m
+        get_x, get_y = line_through_points(
+            tlq_centroid[0], tlq_centroid[1], brq_centroid[0], brq_centroid[1])
 
         # does the line intersect the roof or sides of the bounding box?
         does_intersect_roof = get_y(west_x) > north_y
@@ -172,7 +182,9 @@ def extract_segments_new(X):
             y1 = n-1
             x1 = roundit(get_x(y1))
         
-        all_segments.append([(roundit(x0), roundit(y0)), (roundit(x1), roundit(y1))])
+        # some 
+        if not any([roundit(x1) < roundit(x0), roundit(y1) < roundit(y1)]):
+            all_segments.append([(roundit(x0), roundit(y0)), (roundit(x1), roundit(y1))])
 
     return all_segments
 
@@ -560,6 +572,395 @@ def get_longest(x0,x1,y0,y1):
         return y0, y1
 
 
+def is_good_segment(x0, y0, x1, y1, thresh, silence_and_stable_mask, cqt_window, timestep, sr):
+    x0s = round(x0*cqt_window/(sr*timestep))
+    x1s = round(x1*cqt_window/(sr*timestep))
+    y0s = round(y0*cqt_window/(sr*timestep))
+    y1s = round(y1*cqt_window/(sr*timestep))
+
+    seq1_stab = silence_and_stable_mask[x0s:x1s]
+    seq2_stab = silence_and_stable_mask[y0s:y1s]
+    
+    prop_stab1 = sum(seq1_stab!=0) / len(seq1_stab)
+    prop_stab2 = sum(seq2_stab!=0) / len(seq2_stab)
+
+    if not (prop_stab1 > 0.6 or prop_stab2 > 0.6):
+        return True
+    else:
+        return False
+
+
+def matches_dict_to_groups(matches_dict):
+    all_groups = []
+    c=0
+    for i, matches in matches_dict.items():
+        this_group = [i] + matches
+        for j,ag in enumerate(all_groups):
+            if set(this_group).intersection(set(ag)):
+                # group exists, append
+                all_groups[j] = list(set(all_groups[j] + this_group))
+                c = 1
+                break
+        if c==0:
+            # group doesnt exist yet
+            all_groups.append(this_group)
+        c=0
+    return all_groups
+
+
+def check_groups_unique(all_groups):
+    repl = True
+    for i,ag in enumerate(all_groups):
+        for j,ag1 in enumerate(all_groups):
+            if i==j:
+                continue
+            if set(ag).intersection(set(ag1)):
+                print(f"groups {i} and {j} intersect")
+                repl = False
+    return repl
+    
+
+def compare_segments(Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict):
+    """
+    # Types of matches for two sequences: 
+    #       query (Q):(------) and returned (R):[-------]
+    # 1. (------) [------] - no match
+    #   - Do nothing
+    # 2. (-----[-)-----] - insignificant overlap
+    #   - Do nothing
+    # 3. (-[------)-] - left not significant, overlap significant, right not significant
+    #   - Group Q and R
+
+
+    # Query is on the left: Qx0 < Rx0
+    #################################
+    # 4. (-[-------)--------] - left not significant, overlap significant, right significant
+    #   - Cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R1 and Q to group
+    #   - R2 and R1 marked as new segments
+    # 5. (---------[------)-] - left significant, overlap significant, right not significant
+    #   - Cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - Add Q2 and R to group
+    #   - Q1 and Q2 marked as new segments
+    # 6. (---------[------)-------] - left significant, overlap significant, right significant
+    #   - cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add Q2 and R1 to group
+    #   - Q1, Q2, R1 and R2 marked as new segments
+
+
+    # Query is on the left: Rx0 < Qx0
+    #################################
+    # 7. [-(-------]--------) - left not significant, overlap significant, right significant
+    #   - Cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - Add R and Q1 to group
+    #   - Q1 and Q2 marked as new segments
+    # 8. [---------(------]-) - left significant, overlap significant, right not significant
+    #   - Cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R2 and Q to group
+    #   - R1 and R2 marked as new segments
+    # 9. [---------(------]-------) - left significant, overlap significant, right significant
+    #   - cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R2 and Q1 to group
+    #   - Q1, Q2, R1 and R2 marked as new segments
+
+    """
+    # functions that define line through query(Q) segment
+    Qget_x, Qget_y = line_through_points(Qx0, Qy0, Qx1, Qy1)
+    # get indices corresponding to query(Q)
+    Q_indices = set(range(Qx0, Qx1+1))
+
+    # functions that define line through returned(R) segment
+    Rget_x, Rget_y = line_through_points(Rx0, Ry0, Rx1, Ry1)
+    # get indices corresponding to query(Q)
+    R_indices = set(range(Rx0, Rx1+1))
+
+    # query on the left
+    if Qx0 <= Rx0:
+        # indices in common between query(Q) and returned(R)
+        left_indices = Q_indices.difference(R_indices)
+        overlap_indices = Q_indices.intersection(R_indices)
+        right_indices = R_indices.difference(Q_indices)
+
+        # which parts in the venn diagram
+        # betweem Q and R are large enough to
+        # be considered
+        left_sig = len(left_indices) >= min_length_cqt
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+        right_sig = len(right_indices) >= min_length_cqt
+
+        # which type of match (if any). 
+        # See above for explanation
+        type_1 = not overlap_indices
+        type_2 = not overlap_sig and overlap_indices
+        type_3 = all([overlap_sig, not left_sig, not right_sig])
+
+        type_4 = all([not left_sig, overlap_sig, right_sig])
+        type_5 = all([left_sig, overlap_sig, not right_sig])
+        type_6 = all([left_sig, overlap_sig, right_sig])
+
+        type_7 = False
+        type_8 = False
+        type_9 = False
+
+    # query on the right
+    if Rx0 < Qx0:
+        # indices in common between query(Q) and returned(R)
+        left_indices = R_indices.difference(Q_indices)
+        overlap_indices = R_indices.intersection(Q_indices)
+        right_indices = Q_indices.difference(R_indices)
+
+        # which parts in the venn diagram
+        # betweem Q and R are large enough to
+        # be considered
+        left_sig = len(left_indices) >= min_length_cqt
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+        right_sig = len(right_indices) >= min_length_cqt
+
+        # which type of match (if any). 
+        # See above for explanation
+        type_1 = not overlap_indices
+        type_2 = not overlap_sig and overlap_indices
+        type_3 = all([overlap_sig, not left_sig, not right_sig])
+
+        type_4 = False
+        type_5 = False
+        type_6 = False
+
+        type_7 = all([not left_sig, overlap_sig, right_sig])
+        type_8 = all([left_sig, overlap_sig, not right_sig])
+        type_9 = all([left_sig, overlap_sig, right_sig])
+
+        if type_3:
+            # record match, no further action
+            update_dict(matches_dict, i, j)
+            update_dict(matches_dict, j, i)
+
+        if type_4:
+
+            # Split R into two patterns
+            # that which intersects with
+            # Q....
+            R1x0 = min(overlap_indices)
+            R1x1 = max(overlap_indices)
+            R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
+            R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
+            R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
+
+            # And that part which does 
+            # not intersect with Q...
+            R2x0 = min(right_indices)
+            R2x1 = max(right_indices)
+            R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
+            R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
+            R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
+            
+            # Log new R1 seg and group with Q
+            max_i += 1
+            all_new_segs.append(R1_seg)
+            update_dict(matches_dict, i, max_i)
+            update_dict(matches_dict, max_i, i)
+            
+            # Log new R2 seg
+            max_i += 1
+            all_new_segs.append(R2_seg)
+
+        if type_5:
+
+            # Split Q into two patterns
+            # that which does not intersects
+            # with R....
+            Q1x0 = min(left_indices)
+            Q1x1 = max(left_indices)
+            Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
+            Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
+            Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
+
+            # And that part which does 
+            # intersect with R...
+            Q2x0 = min(overlap_indices)
+            Q2x1 = max(overlap_indices)
+            Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
+            Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
+            Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1))
+            
+            # Log new Q2 seg and group with R
+            max_i += 1
+            all_new_segs.append(Q2_seg)
+            update_dict(matches_dict, j, max_i)
+            update_dict(matches_dict, max_i, j)
+            
+            # Log new Q1 seg
+            max_i += 1
+            all_new_segs.append(Q1_seg)
+
+        if type_6:
+            
+            # Split Q into two patterns
+            # that which does not intersect
+            #  with R....
+            Q1x0 = min(left_indices)
+            Q1x1 = max(left_indices)
+            Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
+            Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
+            Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
+
+            # And that part which does 
+            # intersect with R...
+            Q2x0 = min(overlap_indices)
+            Q2x1 = max(overlap_indices)
+            Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
+            Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
+            Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1)) 
+
+            # Split R into two patterns
+            # that which intersects with
+            # Q....
+            R1x0 = min(overlap_indices)
+            R1x1 = max(overlap_indices)
+            R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
+            R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
+            R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
+
+            # And that part which does 
+            # not intersect with Q...
+            R2x0 = min(right_indices)
+            R2x1 = max(right_indices)
+            R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
+            R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
+            R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
+
+            # Log new Q2/R1 seg and group
+            max_i += 1
+            all_new_segs.append(Q2_seg)
+            update_dict(matches_dict, max_i, max_i+1)
+            update_dict(matches_dict, max_i+1, max_i)
+            max_i += 1
+            all_new_segs.append(R1_seg)
+            
+            # Log new Q1 seg
+            max_i += 1
+            all_new_segs.append(Q1_seg)
+            
+            # log new R2 seg
+            max_i += 1
+            all_new_segs.append(R2_seg)
+
+        if type_7:
+
+            # Split Q into two patterns
+            # that which intersects with
+            # R....
+            Q1x0 = min(overlap_indices)
+            Q1x1 = max(overlap_indices)
+            Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
+            Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
+            Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
+
+            # And that part which does 
+            # not intersect with Q...
+            Q2x0 = min(right_indices)
+            Q2x1 = max(right_indices)
+            Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
+            Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
+            Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1))
+            
+            # Log new Q1 seg and group with R
+            max_i += 1
+            all_new_segs.append(Q1_seg)
+            update_dict(matches_dict, j, max_i)
+            update_dict(matches_dict, max_i, j)
+            
+            # Log new Q2 seg
+            max_i += 1
+            all_new_segs.append(Q2_seg)
+
+        if type_8:
+
+            # Split R into two patterns
+            # that which does not intersects
+            # with Q....
+            R1x0 = min(left_indices)
+            R1x1 = max(left_indices)
+            R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
+            R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
+            R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
+
+            # And that part which does 
+            # intersect with Q...
+            R2x0 = min(overlap_indices)
+            R2x1 = max(overlap_indices)
+            R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
+            R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
+            R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
+            
+            # Log new R2 seg and group with Q
+            max_i += 1
+            all_new_segs.append(R2_seg)
+            update_dict(matches_dict, i, max_i)
+            update_dict(matches_dict, max_i, i)
+            
+            # Log new R1 seg
+            max_i += 1
+            all_new_segs.append(R1_seg)
+
+        if type_9:
+            
+            # Split Q into two patterns
+            # that which does not intersect
+            #  with R....
+            Q1x0 = min(right_indices)
+            Q1x1 = max(right_indices)
+            Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
+            Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
+            Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
+
+            # And that part which does 
+            # intersect with R...
+            Q2x0 = min(overlap_indices)
+            Q2x1 = max(overlap_indices)
+            Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
+            Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
+            Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1)) 
+
+            # Split R into two patterns
+            # that which intersects with
+            # Q....
+            R1x0 = min(overlap_indices)
+            R1x1 = max(overlap_indices)
+            R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
+            R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
+            R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
+
+            # And that part which does 
+            # not intersect with Q...
+            R2x0 = min(left_indices)
+            R2x1 = max(left_indices)
+            R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
+            R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
+            R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
+
+            # Log new R2/Q1 seg and group
+            max_i += 1
+            all_new_segs.append(R2_seg)
+            update_dict(matches_dict, max_i, max_i+1)
+            update_dict(matches_dict, max_i+1, max_i)
+            max_i += 1
+            all_new_segs.append(Q1_seg)
+            
+            # Log new R1 seg
+            max_i += 1
+            all_new_segs.append(R1_seg)
+            
+            # log new Q2 seg
+            max_i += 1
+            all_new_segs.append(Q2_seg)
+    
+    return all_new_segs, max_i, matches_dict
+
+
+
 def group_segments(all_segments, perc_overlap):
     all_seg_copy = all_segments.copy()
 
@@ -750,408 +1151,6 @@ def update_dict(d, k, v):
         d[k].append(v)
     else:
         d[k] = [v]
-
-
-def get_matches_dict(all_segments_reduced, min_length_cqt):
-    # to be sure to be sure
-    all_seg_copy = all_segments_reduced.copy()
-
-    matches_dict = {}
-
-    # create unique indice for every segment
-    segment_ix = {k:v for k,v in enumerate(all_seg_copy)}
-    max_ix = max(segment_ix.keys())
-    
-    for i in range(max_ix+1):
-
-        # Original segment for this loop, we want to 
-        # find all others that intersect with it
-        (x0, y0), (x1, y1) = segment_ix[i]
-
-        ##################################################################################
-        ### Identifying segments in the horizontal and vertical limits of this segment ###
-        ##################################################################################
-        # Find all segments that intersect in the horizontal/vertical direction
-        #
-        #
-        #
-        # horiz_segs/vert_segs format...
-        #   (j, [(x0, y0), (x1, y1)], overlap_orig, overlap_return)
-        #
-        # where j is the index of the returned segment
-        #
-        # and   [(hx0, hy0), (hx1, hy1)] are the segment coords of
-        #       the returned segment
-        #
-        # and   overlap_orig is the proportion of the original segment that
-        #       overlaps (the one this loop is for)
-        #
-        # and   overlap_return is the proportion of the returned segment that
-        #       overlaps (the one returned by list comprehension)
-        horiz_segs = []
-        vert_segs = []
-        for j, [(x0_, y0_), (x1_, y1_)] in segment_ix.items():
-
-            # get horizontal overlap
-            ho1, ho2 = get_overlap(y0, y1, y0_, y1_)
-
-            # get vertical overlap
-            vo1, vo2 = get_overlap(x0, x1, x0_, x1_)
-            
-            if all([ho1, ho2]):
-                horiz_segs.append((j, [(x0_, y0_), (x1_, y1_)], ho1, ho2))
-
-            if all([vo1, vo2]):
-                vert_segs.append((j, [(x0_, y0_), (x1_, y1_)], vo1, vo2))
-
-        ###########################
-        ### Identifying matches ###
-        ###########################
-        # For comparing segments, (------) and [-------]
-        # There are three types of match...
-        #   1. Overlap almost 100 percent on each side (-[-------)-]
-                # - Return both in group unaltered
-        #   2. Large overlap and considerable pattern outside overlap (-[-------)-------------] or (---------[-------)-------------]
-                # - Create new segment for overlapping part
-                #   the non overlapping part will be handled 
-                #   on their own iteration
-        #   3. Overlap is less than minimum sequence length (--------[-)-----------]
-                # - Do not consider match, no grouping, no further segments
-                #   made.
-
-        for h_seg in horiz_segs:
-            j, [(x0_, y0_), (x1_, y1_)], o1, o2 = h_seg
-
-            # using y's here because we are in the horizontal band
-            l = y1 - y0 # length of orig seq
-            l_ = y1_ - y0_ # length of matched seq
-
-            # overlap in time cqt_windows
-            o1s = o1*l
-            o2s = o2*l_
-
-            # non intersecting part in cqt_windows
-            no1s = l_ - o1s
-            no2s = l_ - o2s
-
-            # match types (see comment above)
-            type_1 = o1s >= min_length_cqt and \
-                     o2s >= min_length_cqt and \
-                     no1s < min_length_cqt and \
-                     no2s < min_length_cqt
-
-            type_2 = o1s >= min_length_cqt and \
-                     o2s >= min_length_cqt and \
-                     (no1s >= min_length_cqt or no2s >= min_length_cqt)
-
-            type_3 = o1s < min_length_cqt and \
-                     o2s < min_length_cqt and \
-                     no1s < min_length_cqt and \
-                     no2s < min_length_cqt
-
-            if type_1:
-                # record match, no further action
-                update_dict(matches_dict, i, j)
-                update_dict(matches_dict, j, i)
-
-            if type_2:
-                # create new segment from overlapping part
-                # TODO: this bit
-                pass
-
-        for v_seg in vert_segs:
-            j, [(x0_, y0_), (x1_, y1_)], o1, o2 = v_seg
-
-            # using x's here because we are in the vertical band
-            l = x1 - x0 # length of orig seq
-            l_ = x1_ - x0_ # length of matched seq
-
-            # overlap in time cqt_windows
-            o1s = o1*l
-            o2s = o2*l_
-
-            # non intersecting part in cqt_windows
-            no1s = l - o1s
-            no2s = l_ - o2s
-
-            # match types (see comment above)
-            type_1 = o1s >= min_length_cqt and \
-                     o2s >= min_length_cqt and \
-                     no1s < min_length_cqt and \
-                     no2s < min_length_cqt
-
-            type_2 = o1s >= min_length_cqt and \
-                     o2s >= min_length_cqt and \
-                     (no1s >= min_length_cqt or no2s >= min_length_cqt)
-
-            type_3 = o1s < min_length_cqt and \
-                     o2s < min_length_cqt and \
-                     no1s < min_length_cqt and \
-                     no2s < min_length_cqt
-
-            if type_1:
-                # record match, no further action
-                update_dict(matches_dict, i, j)
-                update_dict(matches_dict, j, i)
-
-            if type_2:
-                # create new segment from overlapping part
-                # TODO: this bit
-                pass
-
-    return matches_dict, segment_ix
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-# query_seg
-# [(1799, 2040), (1951, 2192)]
-
-# all_seg_copy[4]
-# [(2025, 2263), (2160, 2398)]
-
-# all_seg_copy[5]
-# [(2263, 2025), (2398, 2160)]
-
-# xx_match = False
-# yy_match = False
-# xy_match = True
-# yx_match = True
-
-
-# x0 = 1799
-# x1 = 1951
-# y0 = 2040
-# y1 = 2192
-
-# x_0 = 2279
-# x_1 = 2313
-# y_0 = 1195
-# y_1 = 1229
-
-
-# xx_match = do_patterns_overlap(x0, x1, x_0, x_1, perc_overlap=dupl_perc_overlap)
-# yy_match = do_patterns_overlap(y0, y1, y_0, y_1, perc_overlap=dupl_perc_overlap)
-# xy_match = do_patterns_overlap(x0, x1, y_0, y_1, perc_overlap=dupl_perc_overlap)
-# yx_match = do_patterns_overlap(y0, y1, x_0, x_1, perc_overlap=dupl_perc_overlap)
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-#           sample = all_segments_reduced
-
-#           starts_seq_exc = [[test[0][0], test[0][1]] for test in sample]
-#           lengths_seq_exc = [[test[1][0]-test[0][0], test[1][1]-test[0][1]] for test in sample]
-
-#           starts_sec_exc = [[(x*cqt_window)/(sr) for x in y] for y in starts_seq_exc]
-#           lengths_sec_exc = [[(x*cqt_window)/(sr) for x in y] for y in lengths_seq_exc]
-
-#           # Found segments broken from image processing
-#           X_segments = add_segments_to_plot(X_canvas, sample)
-#           skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments)
-
-
-#           # Patterns from full pipeline
-#           X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr, cqt_window)
-#           skimage.io.imsave('images/patterns_sim_mat.png', X_patterns)
-
-
-
-
-
-
-
-
-#           segment_indices = []
-#           same_seqs_thresh_secs = 0.5
-#           same_seqs_thresh = int(same_seqs_thresh_secs*sr/cqt_window)
-#           perc_overlap = 0.8
-
-#           all_seg_copy = all_segments_reduced.copy()
-
-#           seg_length = lambda y: np.hypot(y[1][0]-y[0][0], y[1][1]-y[0][1])
-#           all_seg_copy = sorted(all_seg_copy, key=seg_length, reverse=True)
-
-#           all_groups = []
-#           skip_array = [0]*len(all_seg_copy)
-#           for i in range(len(all_seg_copy)):
-#               # If this segment has been grouped already, do not consider
-#               if skip_array[i] == 1:
-#                   continue
-#               
-#               # To avoid altering original segments array
-#               query_seg = all_seg_copy[i]
-
-#               x0 = query_seg[0][0]
-#               y0 = query_seg[0][1]
-#               x1 = query_seg[1][0]
-#               y1 = query_seg[1][1]
-
-#               # get both corresponding patterns from query
-#               this_group = [(x0,x1), (y0,y1)]
-#               this_index_group = [i,i]
-#               # Iterate through all other segments to identify whether
-#               # any others correspond to the same two patterns...
-#               for j in range(len(all_seg_copy)):
-
-#                   # traverse half of symmetrical array
-#                   #if i >= j:
-#                   #    continue
-
-#                   seg = all_seg_copy[j]
-
-#                   # all segments correspond to two new patterns maximum...
-#                   x_0 = seg[0][0]
-#                   y_0 = seg[0][1]
-#                   x_1 = seg[1][0]
-#                   y_1 = seg[1][1]
-
-#                   #x_match = same_seqs_marriage(x0, x1, x_0, x_1, thresh=same_seqs_thresh)
-#                   #y_match = same_seqs_marriage(y0, y1, y_0, y_1, thresh=same_seqs_thresh)
-
-#                   xx_match = do_patterns_overlap(x0, x1, x_0, x_1, perc_overlap=perc_overlap)
-#                   yy_match = do_patterns_overlap(y0, y1, y_0, y_1, perc_overlap=perc_overlap)
-#                   xy_match = do_patterns_overlap(x0, x1, y_0, y_1, perc_overlap=perc_overlap)
-#                   yx_match = do_patterns_overlap(y0, y1, x_0, x_1, perc_overlap=perc_overlap)
-
-#                   if (xx_match and yy_match) or (xy_match and yx_match):
-#                       # same pattern, do not add and skip
-#                       skip_array[j] = 1
-
-#                   elif (xx_match and not yy_match) or (yx_match and not xy_match):
-#                       # dont append the one that matches (since we already have it)
-#                       if (y_0, y_1) not in this_group:
-#                           this_group += [(y_0, y_1)]
-#                           this_index_group += [j]
-#                       skip_array[j] = 1
-
-#                   elif (yy_match and not xx_match) or (xy_match and not yx_match):
-#                       # dont append the one that matches (since we already have it)
-#                       if (x_0, x_1) not in this_group:
-#                           this_group += [(x_0, x_1)]
-#                           this_index_group += [j]
-#                       skip_array[j] = 1
-
-#               all_groups.append(this_group)
-#               segment_indices.append(this_index_group)
-
-
-#           print('Convert sequences to pitch track timesteps')
-#           starts_seq, lengths_seq = convert_seqs_to_timestep(all_groups, cqt_window, sr, timestep)
-
-#           print('Applying exclusion functions')
-#           #starts_seq_exc, lengths_seq_exc = apply_exclusions(raw_pitch, starts_seq, lengths_seq, exclusion_functions, min_in_group)
-#           starts_seq_exc,  lengths_seq_exc = remove_below_length(starts_seq, lengths_seq, timestep, min_pattern_length_seconds)
-
-#           starts_sec_exc = [[x*timestep for x in p] for p in starts_seq_exc]
-#           lengths_sec_exc = [[x*timestep for x in l] for l in lengths_seq_exc]
-
-#           print('Evaluating')
-#           annotations_orig = load_annotations_new(annotations_path)
-#           metrics = evaluate_all_tiers(annotations_orig, starts_sec_exc, lengths_sec_exc, eval_tol)
-
-
-#           print('Writing all sequences')
-#           plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_hough', clear_dir=True, plot_kwargs=plot_kwargs)
-#           write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_hough')
-
-
-
-
-
-#           # plot one group
-#           i=0
-#           j=2
-#           if j:
-#               sse = [starts_sec_exc[i], starts_sec_exc[j]]
-#               lse = [lengths_sec_exc[i], lengths_sec_exc[j]]
-#               indices1 = segment_indices[i]
-#               indices2 = segment_indices[j]
-#           else:
-#               sse = [starts_sec_exc[i]]
-#               lse = [lengths_sec_exc[i]]
-#               indices1 = segment_indices[i]
-#               indices2 = None
-
-#           X_patterns = add_patterns_to_plot(X_canvas, sse, lse, sr, cqt_window)
-#           skimage.io.imsave('images/patterns_sim_mat.png', X_patterns)
-#           print(indices1)
-#           print(indices2)
-
-
-
-
-
-#           segmentj = all_segments_reduced[0]
-#           segmenti = all_segments_reduced[4]
-
-#           x0 = segmenti[0][0]
-#           y0 = segmenti[0][1]
-#           x1 = segmenti[1][0]
-#           y1 = segmenti[1][1]
-
-#           x_0 = segmentj[0][0]
-#           y_0 = segmentj[0][1]
-#           x_1 = segmentj[1][0]
-#           y_1 = segmentj[1][1]
-
-#           xx_match = do_patterns_overlap(x0, x1, x_0, x_1, perc_overlap=0.7)
-#           yy_match = do_patterns_overlap(y0, y1, y_0, y_1, perc_overlap=0.7)
-#           xy_match = do_patterns_overlap(x0, x1, y_0, y_1, perc_overlap=0.7)
-#           yx_match = do_patterns_overlap(y0, y1, x_0, x_1, perc_overlap=0.7)
-
-#           # Found segments broken from image processing
-#           X_segments = add_segments_to_plot(X_canvas, [segmenti, segmentj])
-#           skimage.io.imsave('images/segments_broken_sim_mat.png', X_segments)
-
-
-
-
-
-
-
-#           # do_patterns_overlap
-#           p0_indices = set(range(x0, x1+1))
-#           p1_indices = set(range(y_0, y_1+1))
-
-#           o1 = len(p1_indices.intersection(p0_indices))/len(p0_indices)>perc_overlap
-#           o2 = len(p1_indices.intersection(p0_indices))/len(p1_indices)>perc_overlap
-
 
 
 
