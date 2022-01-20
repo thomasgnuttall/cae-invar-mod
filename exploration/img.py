@@ -129,14 +129,7 @@ def diagonal_gaussian(X, gauss_sigma, filename=False):
 
 
 def make_symmetric(X):
-    X_copy = X.copy()
-    non_zero = np.where(X_copy==1)
-    top_triangle_x = [x for x,y in zip(*non_zero) if x>y]
-    top_triangle_y = [y for x,y in zip(*non_zero) if x>y]
-
-    X_copy[top_triangle_y, top_triangle_x] = 1.0
-
-    return X_copy
+    return X + X.T - np.diag(X.diagonal())
 
 
 def edges_to_contours(X, kernel_size=10):
