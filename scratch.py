@@ -336,7 +336,6 @@ print('Grouping Segments')
 all_groups = matches_dict_to_groups(matches_dict)
 check_groups_unique(all_groups)
 
-
 all_groups = [[old_and_new_segs[i] for i in ag if i in old_and_new_segs] for ag in all_groups]
 all_groups  = [[((x0,x1),(y0,y1)) for ((x0,y0),(x1,y1)) in ag] for ag in all_groups]
 all_groups  = [sorted([x for y in ag for x in y]) for ag in all_groups]
@@ -350,9 +349,25 @@ all_groups = sorted(all_groups, key=lambda y: -len(y))
 all_groups = [x for x in all_groups if len(x) > 0]
 
 
+def same_group(group1, group2, perc_overlap=dupl_perc_overlap):
+    for x0,x1 in group1:
+        for y0,y1 in group2:
+            overlap = do_patterns_overlap(x0, x1, y0, y1, perc_overlap=perc_overlap)
+            if overlap:
+                return True
 
+## Remove those that are identical
+group_match_dict = {}
+for i, ag1 in enumerate(all_groups):
+    for j, ag2 in enumerate(all_groups):
+        if same_group(ag1, ag2):
+            update_dict(group_match_dict, i, j)
+            update_dict(group_match_dict, j, i)
+all_groups_ix = matches_dict_to_groups(group_match_dict)
+all_groups_ix = [list(set(x)) for x in all_groups_ix]
+all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
+all_groups = [remove_group_duplicates(g, 0.50) for g in all_groups]
 
-#all_groups = group_segments(all_segments_reduced, perc_overlap=0.95)
 print(f'    {len(all_groups)} groups found...')
 
 print('Convert sequences to pitch track timesteps')
@@ -365,8 +380,56 @@ starts_seq_exc,  lengths_seq_exc = remove_below_length(starts_seq, lengths_seq, 
 starts_seq_exc = [p for p in starts_seq_exc if len(p)>min_in_group]
 lengths_seq_exc = [p for p in lengths_seq_exc if len(p)>min_in_group]
 
-starts_sec_exc = [[x*timestep for x in p] for p in starts_seq_exc]
-lengths_sec_exc = [[x*timestep for x in l] for l in lengths_seq_exc]
+
+print('Extend all segments to stable or silence')
+silence_and_stable_mask_2 = np.array([1 if any([i==2,j==2]) else 0 for i,j in zip(silence_mask, stable_mask)])
+def extend_to_mask(starts_seq_exc, lengths_seq_exc, mask, toler=0.5):
+    mask_i = list(range(len(mask)))
+    starts_seq_ext = []
+    lengths_seq_ext = []
+    for i in range(len(starts_seq_exc)):
+        s_group = starts_seq_exc[i]
+        l_group = lengths_seq_exc[i]
+        this_group_s = []
+        this_group_l = []
+        for j in range(len(s_group)):
+            l = l_group[j]
+            s1 = s_group[j]
+            s2 = s1 + l
+            
+            s1_ = s1 - round(l*toler)
+            s2_ = s2 + round(l*toler)
+
+            midpoint = s1 + round(l/2)
+
+            s1_mask   = list(mask[s1_:s1])
+            s2_mask   = list(mask[s2:s2_])
+            s1_mask_i = list(mask_i[s1_:s1])
+            s2_mask_i = list(mask_i[s2:s2_])
+
+            if 1 in s1_mask:
+                ix = len(s1_mask) - s1_mask[::-1].index(1) - 1
+                s1 = s1_mask_i[ix]
+
+            if 1 in s2_mask:
+                ix = s2_mask.index(1)
+                s2 = s2_mask_i[ix]
+
+
+            l = s2 - s1
+
+            this_group_s.append(s1)
+            this_group_l.append(l)
+        starts_seq_ext.append(this_group_s)
+        lengths_seq_ext.append(this_group_l)
+
+    return starts_seq_ext, lengths_seq_ext
+
+
+starts_seq_ext, lengths_seq_ext = extend_to_mask(starts_seq_exc, lengths_seq_exc, silence_and_stable_mask_2)
+
+starts_sec_ext = [[x*timestep for x in p] for p in starts_seq_ext]
+lengths_sec_ext = [[x*timestep for x in l] for l in lengths_seq_ext]
 
 print('Evaluating')
 annotations_orig = load_annotations_new(annotations_path)
@@ -380,13 +443,13 @@ else:
 annotations_filt = annotations_filt[annotations_filt['tier']!='short_motif']
 #metrics, annotations_tag = evaluate_all_tiers(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc)
 print('')
-n_patterns = sum([len(x) for x in starts_sec_exc])
-coverage = get_coverage(pitch, starts_seq_exc, lengths_seq_exc)
+n_patterns = sum([len(x) for x in starts_seq_ext])
+coverage = get_coverage(pitch, starts_seq_ext, lengths_seq_ext)
 print(f'Number of Patterns: {n_patterns}')
-print(f'Number of Groups: {len(starts_sec_exc)}')
+print(f'Number of Groups: {len(starts_sec_ext)}')
 print(f'Coverage: {round(coverage,2)}')
 #evaluation_report(metrics)
-annotations_tagged = evaluate_quick(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc)
+annotations_tagged = evaluate_quick(annotations_filt, starts_sec_ext, lengths_sec_ext, eval_tol, partial_perc)
 
 
 
@@ -399,8 +462,8 @@ annotations_tagged = evaluate_quick(annotations_filt, starts_sec_exc, lengths_se
 ## Output ##
 ############
 print('Writing all sequences')
-plot_all_sequences(raw_pitch, time, lengths_seq_exc[:top_n], starts_seq_exc[:top_n], 'output/new_group', clear_dir=True, plot_kwargs=plot_kwargs)
-write_all_sequence_audio(audio_path, starts_seq_exc[:top_n], lengths_seq_exc[:top_n], timestep, 'output/new_group')
+plot_all_sequences(raw_pitch, time, lengths_seq_ext[:top_n], starts_seq_ext[:top_n], 'output/new_group', clear_dir=True, plot_kwargs=plot_kwargs)
+write_all_sequence_audio(audio_path, starts_seq_ext[:top_n], lengths_seq_ext[:top_n], timestep, 'output/new_group')
 annotations_tagged.to_csv('output/new_group/annotations.csv', index=False)
 
 
@@ -410,7 +473,7 @@ annotations_tagged.to_csv('output/new_group/annotations.csv', index=False)
 # partial_percs = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
 # for p in partial_percs:
 #     metrics, annotations_tag = evaluate_all_tiers(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=p)
-#     all_recalls.append(metrics['partial_match_recall_all'])
+#     all_recalls.append(metrics['pasrtial_match_recall_all'])
 
 
 # plt.figure(figsize=(10,5))
@@ -461,8 +524,8 @@ write_all_sequence_audio(audio_path, start_single, len_single, timestep, 'output
 #####################################################
 ## Plotting annotations and Results on Sim Matrix  ##
 #####################################################
-from exporation.visualisation import add_line_to_plot, get_lines, add_annotations_to_plot, add_patterns_to_plot, add_segments_to_plot, join_plots
-
+from exploration.visualisation import add_line_to_plot, get_lines, add_annotations_to_plot, add_patterns_to_plot, add_segments_to_plot, join_plots
+import matplotlib
 X_canvas = X.copy()
 X_canvas[:] = 0
 
@@ -505,6 +568,37 @@ matplotlib.image.imsave('images/4_annotations_patterns.png', X_joined.astype(np.
 
 X_joined = join_plots(X_orig, X_patterns[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/5_self_sim_patterns.png', X_joined.astype(np.uint8))
+
+
+
+
+
+
+
+
+
+
+
+
+X_test = np.zeros((50,50))
+
+x0 = 5
+y0 = 34
+x1 = 15
+y1 = 47
+X_test[x0,y0] = 1
+X_test[x1,y1] = 1
+
+from exploration.segments import line_through_points
+get_x, get_y = line_through_points(x0,y0,x1,y1)
+
+line_x = [round(get_x(y)) for y in range(y0,y1)]
+line_y = [round(get_y(x)) for x in range(x0,x1)]
+line_x = [line_x[i] for i in range(len(line_x)) if line_x[i-1] != line_x[i]]
+line_y = [line_y[i] for i in range(len(line_y)) if line_y[i-1] != line_y[i]]
+
+X_test[line_x,line_y] = 1
+matplotlib.image.imsave('images/line_through_points.png', X_test)
 
 
 
