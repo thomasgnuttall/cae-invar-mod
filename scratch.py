@@ -17,7 +17,7 @@ from exploration.img import (
     apply_bin_op, make_symmetric, edges_to_contours)
 from exploration.segments import (
     extract_segments_new, get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, 
-    remove_short, group_segments, extend_segments, group_and_fill_hough)
+    remove_short, extend_segments, compare_segments)
 from exploration.sequence import (
     apply_exclusions, contains_silence, min_gap, too_stable, 
     convert_seqs_to_timestep, get_stability_mask, add_center_to_mask,
