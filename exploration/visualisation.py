@@ -3,6 +3,7 @@ import os
 from matplotlib.patches import Rectangle
 import matplotlib.pyplot as plt
 import matplotlib.style as style
+import matplotlib.image
 import numpy as np
 import numpy.ma as ma
 import scipy.signal
@@ -239,3 +240,98 @@ def plot_all_sequences(pitch, times, lengths, seq_list, direc, clear_dir=False, 
             plot_subsequence(
                 sp, l, pitch, times, timestep, path=plot_path, plot_kwargs=plot_kwargs
             )
+
+def add_line_to_plot(arr, x0, x1, y0, y1):
+    
+    length = int(np.hypot(x1-x0, y1-y0))
+    x, y = np.linspace(x0, x1, length), np.linspace(y0, y1, length)
+    x = x.astype(int)
+    y = y.astype(int)
+
+    arr[x, y] = 100
+
+    return arr
+
+
+def get_lines(s1, s2):
+    n = len(s1)
+    all_lines = []
+    for i in range(n):
+        x0 = s1[i]
+        x1 = s2[i]
+        for j in range(n):
+            if j==i:
+                continue
+            y0 = s1[j]
+            y1 = s2[j]
+            all_lines.append((x0, x1, y0, y1))
+    return all_lines
+
+
+def add_annotations_to_plot(arr, annotations, sr, cqt_window):
+    arr_ = arr.copy()
+    annotations_grouped = annotations.groupby('text')['s1']\
+                                          .apply(list)\
+                                          .reset_index()
+
+    annotations_grouped['s2'] = annotations.groupby('text')['s2']\
+                                                .apply(list)\
+                                                .reset_index()['s2']
+    
+    for i, row in annotations_grouped.iterrows():
+        s1 = row['s1']
+        s2 = row['s2']
+        these_lines = get_lines(s1, s2)
+        for x0, x1, y0, y1 in these_lines:
+            arr_ = add_line_to_plot(
+                arr_, int(x0*sr/cqt_window), int(x1*sr/cqt_window), 
+                int(y0*sr/cqt_window), int(y1*sr/cqt_window))
+
+    return arr_
+
+
+def add_patterns_to_plot(arr, patterns, lengths, sr, cqt_window):
+    arr_ = arr.copy()
+    
+    for i, group in enumerate(patterns):
+        lens = lengths[i]
+        
+        s1 = group
+        s2 = [g+lens[j] for j,g in enumerate(s1)]
+
+        these_lines = get_lines(s1, s2)
+        for x0, x1, y0, y1 in these_lines:
+            arr_ = add_line_to_plot(
+                arr_, int(x0*sr/cqt_window), int(x1*sr/cqt_window), 
+                int(y0*sr/cqt_window), int(y1*sr/cqt_window))
+
+    return arr_
+
+
+def add_segments_to_plot(arr, segments):
+    arr_ = arr.copy()
+    for i, ((x0, y0), (x1, y1)) in enumerate(segments):
+        arr_ = add_line_to_plot(arr_, int(x0), int(x1), int(y0), int(y1))
+    return arr_
+
+
+def join_plots(A, B, both_binary=True):
+
+    h,w = A.shape
+    
+    rgb = np.zeros((h,w,3))
+
+    if both_binary:
+        rgb[A>0] = np.array([255,255,255]) # WHITE
+        rgb[B>0] = np.array([255,0,0]) # RED
+
+        x,y = np.where(np.logical_and(A > 1, B > 1))
+        rgb[x,y] = np.array([207, 126, 190]) # PINK
+    else:
+        scaled = ((A - A.min()) / (A.max() - A.min()) )*255
+        rgb[:,:,0] = scaled
+        rgb[:,:,1] = scaled
+        rgb[:,:,2] = scaled
+        rgb[B>0] = np.array([255,0,0]) # RED
+
+    return rgb
