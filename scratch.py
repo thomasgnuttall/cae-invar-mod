@@ -17,13 +17,13 @@ from exploration.img import (
     apply_bin_op, make_symmetric, edges_to_contours)
 from exploration.segments import (
     extract_segments_new, get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, 
-    remove_short, extend_segments, compare_segments)
+    remove_short, extend_segments, compare_segments, join_all_segments)
 from exploration.sequence import (
     apply_exclusions, contains_silence, min_gap, too_stable, 
     convert_seqs_to_timestep, get_stability_mask, add_center_to_mask,
     remove_below_length)
 from exploration.evaluation import evaluate_quick, load_annotations_new, evaluate_all_tiers, evaluation_report, get_coverage
-from exploration.visualisation import plot_all_sequences, plot_pitch
+from exploration.visualisation import plot_all_sequences, plot_pitch, flush_matplotlib
 from exploration.io import load_sim_matrix, write_all_sequence_audio, load_yaml
 from exploration.pitch import cents_to_pitch, pitch_seq_to_cents, pitch_to_cents
 
@@ -84,7 +84,7 @@ conv_filter = sobel
 #   sobel bidirectional, 0.15
 bin_thresh = 0.11
 # lower bin_thresh for areas surrounding segments
-bin_thresh_segment = 0.07
+bin_thresh_segment = 0.03
 # percentage either size of a segment considered for lower bin thresh
 perc_tail = 0.5
 
@@ -107,7 +107,9 @@ hough_high_angle = 45.01
 hough_low_angle = 44.99
 
 # Distance between consecutive diagonals to be joined in seconds
-min_diff_trav = 0.5
+min_diff_trav = 0.25
+min_diff_trav_hyp = (min_diff_trav**2 + min_diff_trav**2)**0.5 # transslate min_diff_trav to correpsonding diagonal distance
+min_diff_trav_seq = min_diff_trav_hyp*sr/cqt_window
 
 # Two segments must overlap in both x and y by <dupl_perc_overlap> 
 # to be considered the same, only the longest is returned
@@ -246,15 +248,21 @@ print('Extending Segments')
 all_segments_extended = extend_segments(all_segments, X_sym, X_conv, perc_tail, bin_thresh_segment)
 print(f'    {len(all_segments_extended)} extended segments...')
 
+print('Joining segments that are sufficiently close')
+all_segments_joined = join_all_segments(all_segments_extended, min_diff_trav_seq)
+print(f'    {len(all_segments_joined)} joined segments...')
+
 print('Breaking segments with silent/stable regions')
 # Format - [[(x,y), (x1,y1)],...]
-all_broken_segments = break_all_segments(all_segments_extended, silence_and_stable_mask, cqt_window, sr, timestep)
+all_broken_segments = break_all_segments(all_segments_joined, silence_mask, cqt_window, sr, timestep)
+all_broken_segments = break_all_segments(all_broken_segments, stable_mask, cqt_window, sr, timestep)
 print(f'    {len(all_broken_segments)} broken segments...')
 
 #[(i,((x0,y0), (x1,y1))) for i,((x0,y0), (x1,y1)) in enumerate(all_segments) if x1-x0>10000]
 print('Reducing Segments')
 all_segments_reduced = remove_short(all_broken_segments, min_length_cqt)
 print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pattern_length_seconds}s...')
+
 
 
 
@@ -456,7 +464,7 @@ print('Writing all sequences')
 plot_all_sequences(raw_pitch, time, lengths_seq_ext[:top_n], starts_seq_ext[:top_n], 'output/new_group', clear_dir=True, plot_kwargs=plot_kwargs)
 write_all_sequence_audio(audio_path, starts_seq_ext[:top_n], lengths_seq_ext[:top_n], timestep, 'output/new_group')
 annotations_tagged.to_csv('output/new_group/annotations.csv', index=False)
-
+flush_matplotlib()
 
 
 
@@ -535,6 +543,10 @@ X_segments = add_segments_to_plot(X_canvas, all_segments)
 # Found segments broken from image processing
 X_segments_reduced = add_segments_to_plot(X_canvas, all_segments_reduced)
 
+# Found segments broken from image processing
+X_segments_extended = add_segments_to_plot(X_canvas, all_segments_extended)
+X_segments_joined = add_segments_to_plot(X_canvas, all_segments_joined)
+
 # Patterns from full pipeline
 X_patterns = add_patterns_to_plot(X_canvas, starts_sec_ext, lengths_sec_ext, sr, cqt_window)
 
@@ -545,8 +557,6 @@ matplotlib.image.imsave('images/0_self_sim.png', X_joined.astype(np.uint8))
 X_joined = join_plots(X_orig, X_sym[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/1_self_sim_sym.png', X_joined.astype(np.uint8))
 
-X_joined = join_plots(X_orig, X_ext[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/2_self_sim_ext.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_binop[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/3_self_sim_binop.png', X_joined.astype(np.uint8))
@@ -554,17 +564,23 @@ matplotlib.image.imsave('images/3_self_sim_binop.png', X_joined.astype(np.uint8)
 X_joined = join_plots(X_orig, X_segments[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/4_self_sim_segments.png', X_joined.astype(np.uint8))
 
+X_joined = join_plots(X_orig, X_segments_extended[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/5_self_sim_extended.png', X_joined.astype(np.uint8))
+
+X_joined = join_plots(X_orig, X_segments_joined[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/6_self_sim_joined.png', X_joined.astype(np.uint8))
+
 X_joined = join_plots(X_orig, X_segments_reduced[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/5_self_sim_segments_reduced.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/8_self_sim_segments_reduced.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_annotate[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/6_self_sim_annotate.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/9_self_sim_annotate.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_annotate[samp1:samp2,samp1:samp2], X_patterns[samp1:samp2,samp1:samp2])
-matplotlib.image.imsave('images/7_annotations_patterns.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/10_annotations_patterns.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_patterns[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/8_self_sim_patterns.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/11_self_sim_patterns.png', X_joined.astype(np.uint8))
 
 
 
@@ -644,14 +660,14 @@ i0 = clos0
 i1 = clos1
 # go backwards through preceeding extension until there are no more
 # values that correspond to similarity above threshold
-for i,v in list(enumerate(new_seg[:clos0]))[::-1]:
+for i,v in list(enumerate(new_seg))[:clos0][::-1]:
     if v == 0:
         i0 = i + 1
         break
 
 # go forwards through succeeding extension until there are no more
 # values that correspond to similarity above threshold
-for i,v in list(enumerate(new_seg[clos1:])):
+for i,v in list(enumerate(new_seg))[clos1:]:
     if v == 0:
         i1 = i - 1
         break

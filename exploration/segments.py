@@ -1015,6 +1015,66 @@ def update_dict(d, k, v):
         d[k] = [v]
 
 
+def get_dist(point1, point2):
+    x1, y1 = point1
+    x2, y2 = point2
+    return ((x1-x2)**2 + (y1-y2)**2)**0.5
+
+
+def join_segments(segA, segB):
+    ((Ax0,Ay0), (Ax1,Ay1)) = segA
+    ((Bx0,By0), (Bx1,By1)) =  segB
+    # which starts closer to origin?
+    # use that ones start point and the others end point
+    if get_dist((Ax0,Ay0), (0,0)) > get_dist((Bx0,By0), (0,0)):
+        x0 = Bx0
+        y0 = By0
+        x1 = Ax1
+        y1 = Ay1
+    else:
+        x0 = Ax0
+        y0 = Ay0
+        x1 = Bx1
+        y1 = By1
+    return ((x0,y0), (x1, y1))
+
+
+def join_all_segments(all_segments, min_diff_trav_seq):
+    group_join_dict = {}
+    for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(all_segments))):
+        for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(all_segments):
+            if i == j:
+                continue
+
+            if abs(Rx0-Qx1) > min_diff_trav_seq:
+                continue
+            if abs(Ry0-Qy1) > min_diff_trav_seq:
+                continue
+
+            # if distance between start an end
+            if get_dist((Rx0, Ry0), (Qx1, Qy1)) < min_diff_trav_seq:
+                update_dict(group_join_dict, i, j)
+                update_dict(group_join_dict, j, i)
+                continue
+            # if distance between end and start
+            elif get_dist((Rx1, Ry1), (Qx0, Qy0)) < min_diff_trav_seq:
+                update_dict(group_join_dict, i, j)
+                update_dict(group_join_dict, j, i)
+                continue
+
+    all_prox_groups = matches_dict_to_groups(group_join_dict)
+    to_skip = []
+    all_segments_joined = []
+    for group in all_prox_groups:
+        to_skip += group
+        seg = all_segments[group[0]]
+        for g in group[1:]:
+            seg2 = all_segments[g]
+            seg = join_segments(seg, seg2)
+        all_segments_joined.append(seg)
+    all_segments_joined += [x for i,x in enumerate(all_segments) if i not in to_skip]
+    return all_segments_joined
+
 
 
 

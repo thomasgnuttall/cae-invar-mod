@@ -335,3 +335,11 @@ def join_plots(A, B, both_binary=True):
         rgb[B>0] = np.array([255,0,0]) # RED
 
     return rgb
+
+
+def flush_matplotlib():
+    fig = plt.figure()
+    plt.figure().clear()
+    plt.close()
+    plt.cla()
+    plt.clf()
