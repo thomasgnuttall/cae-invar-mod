@@ -70,8 +70,7 @@ print('Computing stability/silence mask')
 stable_mask = get_stability_mask(raw_pitch, min_stability_length_secs, stab_hop_secs, freq_var_thresh_stab, timestep)
 silence_mask = (raw_pitch == 0).astype(int)
 silence_mask = add_center_to_mask(silence_mask)
-
-
+silence_and_stable_mask = np.array([int(any([i,j])) for i,j in zip(silence_mask, stable_mask)])
 
 ### Image Processing
 # convolutional filter
@@ -85,7 +84,7 @@ conv_filter = sobel
 #   sobel bidirectional, 0.15
 bin_thresh = 0.11
 # lower bin_thresh for areas surrounding segments
-bin_thresh_segment = 0.085
+bin_thresh_segment = 0.07
 # percentage either size of a segment considered for lower bin thresh
 perc_tail = 0.5
 
@@ -101,7 +100,7 @@ binop_dim = 3 # square dimension of binary opening structure (square matrix of z
 
 # Hough transform parameters
 min_dist_sec = 0 # min dist in seconds between lines
-hough_threshold = 25
+hough_threshold = 10
 
 # Only search for lines between these angles (45 corresponds to main diagonal)
 hough_high_angle = 45.01
@@ -212,14 +211,8 @@ else:
 print('Ensuring symmetry between upper and lower triangle in array')
 X_sym = make_symmetric(X_cont)
 
-print('Applying Hough Transform to edges')
-peaks = hough_transform_new(X_sym, hough_high_angle, hough_low_angle, hough_threshold)
-
-print(f'Extending edges in convolved array along Hough Lines with lower threshold of {bin_thresh_segment}, (previously {bin_thresh})')
-X_ext = extend_segments(X_conv, X_sym, peaks, min_diff_trav, cqt_window, sr, bin_thresh_segment, perc_tail)
-
 print('Identifying and isolating regions between edges')
-X_fill = edges_to_contours(X_ext, etc_kernel_size)
+X_fill = edges_to_contours(X_sym, etc_kernel_size)
 
 print('Cleaning isolated non-directional regions using morphological opening')
 X_binop = apply_bin_op(X_fill, binop_dim)
@@ -229,7 +222,6 @@ X_binop = make_symmetric(X_binop)
 
 if save_imgs:
     skimage.io.imsave(binop_filename, X_binop)
-
 
 ## Join segments that are sufficiently close
 print('Extracting segments using flood fill and centroid')
@@ -250,17 +242,13 @@ import pickle
 file = open('output/all_segments.pkl','rb')
 all_segments = pickle.load(file)
 
-
-
-
-
-
-silence_and_stable_mask = np.array([int(any([i,j])) for i,j in zip(silence_mask, stable_mask)])
-
+print('Extending Segments')
+all_segments_extended = extend_segments(all_segments, X_sym, X_conv, perc_tail, bin_thresh_segment)
+print(f'    {len(all_segments_extended)} extended segments...')
 
 print('Breaking segments with silent/stable regions')
 # Format - [[(x,y), (x1,y1)],...]
-all_broken_segments = break_all_segments(all_segments, silence_and_stable_mask, cqt_window, sr, timestep)
+all_broken_segments = break_all_segments(all_segments_extended, silence_and_stable_mask, cqt_window, sr, timestep)
 print(f'    {len(all_broken_segments)} broken segments...')
 
 #[(i,((x0,y0), (x1,y1))) for i,((x0,y0), (x1,y1)) in enumerate(all_segments) if x1-x0>10000]
@@ -431,6 +419,9 @@ starts_seq_ext, lengths_seq_ext = extend_to_mask(starts_seq_exc, lengths_seq_exc
 starts_sec_ext = [[x*timestep for x in p] for p in starts_seq_ext]
 lengths_sec_ext = [[x*timestep for x in l] for l in lengths_seq_ext]
 
+starts_seq_ext = [[int(x/timestep) for x in p] for p in starts_sec_ext]
+lengths_seq_ext = [[int(x/timestep) for x in l] for l in lengths_sec_ext]
+
 print('Evaluating')
 annotations_orig = load_annotations_new(annotations_path)
 if s1:
@@ -545,29 +536,177 @@ X_segments = add_segments_to_plot(X_canvas, all_segments)
 X_segments_reduced = add_segments_to_plot(X_canvas, all_segments_reduced)
 
 # Patterns from full pipeline
-X_patterns = add_patterns_to_plot(X_canvas, starts_sec_exc, lengths_sec_exc, sr, cqt_window)
+X_patterns = add_patterns_to_plot(X_canvas, starts_sec_ext, lengths_sec_ext, sr, cqt_window)
 
 
 X_joined = join_plots(X_orig, X_canvas[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/0_self_sim.png', X_joined.astype(np.uint8))
 
-X_joined = join_plots(X_orig, X_segments[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/1_self_sim_segments.png', X_joined.astype(np.uint8))
+X_joined = join_plots(X_orig, X_sym[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/1_self_sim_sym.png', X_joined.astype(np.uint8))
 
-X_joined = join_plots(X_orig, X_segments_reduced[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/1_self_sim_segments_reduced.png', X_joined.astype(np.uint8))
+X_joined = join_plots(X_orig, X_ext[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/2_self_sim_ext.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_binop[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/2_self_sim_binop.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/3_self_sim_binop.png', X_joined.astype(np.uint8))
+
+X_joined = join_plots(X_orig, X_segments[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/4_self_sim_segments.png', X_joined.astype(np.uint8))
+
+X_joined = join_plots(X_orig, X_segments_reduced[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/5_self_sim_segments_reduced.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_annotate[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/3_self_sim_annotate.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/6_self_sim_annotate.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_annotate[samp1:samp2,samp1:samp2], X_patterns[samp1:samp2,samp1:samp2])
-matplotlib.image.imsave('images/4_annotations_patterns.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/7_annotations_patterns.png', X_joined.astype(np.uint8))
 
 X_joined = join_plots(X_orig, X_patterns[samp1:samp2,samp1:samp2], False)
-matplotlib.image.imsave('images/5_self_sim_patterns.png', X_joined.astype(np.uint8))
+matplotlib.image.imsave('images/8_self_sim_patterns.png', X_joined.astype(np.uint8))
+
+
+
+
+
+# get all segments in window
+list(sorted([(i,((x1-x0)**2+(y1-y0)**2)**0.5) for i,((x0,y0),(x1, y1)) in enumerate(all_segments) if x0>5000 and x1 < 9000 and y0 > 5000 and y1 < 9000], key=lambda y: -y[1]))
+
+test_i = 1230
+
+all_segments_test = [all_segments[test_i]]
+all_segments_extended_test = [all_segments_extended[test_i]]
+
+
+# Found segments from image processing
+X_segments = add_segments_to_plot(X_canvas, all_segments_test)
+
+# Found segments broken from image processing
+X_segments_reduced = add_segments_to_plot(X_canvas, all_segments_extended_test)
+
+
+X_joined = join_plots(X_orig, X_segments[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/4_self_sim_segments.png', X_joined.astype(np.uint8))
+
+X_joined = join_plots(X_orig, X_segments_reduced[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/5_self_sim_segments_reduced.png', X_joined.astype(np.uint8))
+
+
+
+from exploration.segments import closest_node
+this_seg  = all_segments[test_i]
+((x0, y0), (x1, y1)) = this_seg
+
+X_in = X_sym.copy()
+h,w = X_in.shape
+
+
+dx = (x1-x0)
+dy = (y1-y0)
+
+length = (dx**2 + dy**2)**0.5
+grad = dy/dx
+
+# Angle line makes with x axis
+theta = np.arctan(grad)
+
+# Length of extra part of line
+extra = length * perc_tail
+
+# Get new start and end points of extended segment
+Dx = extra/np.sin(theta)
+Dy = extra/np.cos(theta) 
+
+X0 = int(x0 - Dx)
+Y0 = int(y0 - Dy)
+X1 = int(x1 + Dx)
+Y1 = int(y1 + Dy)
+
+# Coordinates of line connecting X0, Y0 and X1, Y1
+new_length = round(length + 2*extra)
+X, Y = np.linspace(X0, X1, new_length), np.linspace(Y0, Y1, new_length)
+X = [round(x) for x in X]
+Y = [round(y) for y in Y]
+filts = [(x,y) for x,y in zip(X,Y) if all([x>=0, y>=0, x<w, y<h])]
+X = [x[0] for x in filts]
+Y = [x[1] for x in filts]
+
+# the line can be cut short because of matrix boundaries
+clos0 = closest_node((x0,y0), list(zip(X,Y)))
+clos1 = closest_node((x1,y1), list(zip(X,Y)))
+
+new_seg = X_conv[X,Y]>bin_thresh_segment
+# original segment is always 1
+new_seg[clos0:clos1+1] = 1
+
+i0 = clos0
+i1 = clos1
+# go backwards through preceeding extension until there are no more
+# values that correspond to similarity above threshold
+for i,v in list(enumerate(new_seg[:clos0]))[::-1]:
+    if v == 0:
+        i0 = i + 1
+        break
+
+# go forwards through succeeding extension until there are no more
+# values that correspond to similarity above threshold
+for i,v in list(enumerate(new_seg[clos1:])):
+    if v == 0:
+        i1 = i - 1
+        break
+
+x0_new = X[i0]
+y0_new = Y[i0]
+
+x1_new = X[i1]
+y1_new = Y[i1]
+
+ext_segment = [(x0_new, y0_new), (x1_new, y1_new)]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

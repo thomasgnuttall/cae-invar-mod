@@ -256,34 +256,82 @@ def extract_segments(matrix, angle, dist, min_diff, cqt_window, sr, padding=None
     return all_segments
 
 
-def extend_segments(X_conv, X_cont, peaks, min_diff_trav, cqt_window, sr, bin_thresh_segment, perc_tail):
-    """
-    The segments surfaced by the convolution have tails that fade to 0, we want the binarizing
-    threshold to be lower for these tails than the rest of the array
-    """
-    new_cont = X_cont.copy()
-    all_segments = []
-    for _, angle, dist in zip(*peaks):
-        segments = extract_segments(X_cont, angle, dist, min_diff_trav, cqt_window, sr, padding=perc_tail)
+def closest_node(node, nodes):
+    nodes = np.asarray(nodes)
+    deltas = nodes - node
+    dist_2 = np.einsum('ij,ij->i', deltas, deltas)
+    return np.argmin(dist_2)
 
-        for s in segments:
-            x0 = s[0][0]
-            y0 = s[0][1]
-            x1 = s[1][0]
-            y1 = s[1][1]
 
-            # Length of line to traverse
-            length = int(np.hypot(x1-x0, y1-y0))
-            x, y = np.linspace(x0, x1, length), np.linspace(y0, y1, length)
+def extend_segments(all_segments, X_in, X_conv, perc_tail, bin_thresh_segment):
+    h,w = X_in.shape
 
-            # x and y indices corresponding to line
-            x = x.astype(int)
-            y = y.astype(int)
-            
-            for X,Y in zip(x,y):
-                if X_conv[X,Y] >= bin_thresh_segment:
-                    new_cont[X,Y] = 1
-    return new_cont
+    all_segments_extended = []
+    for ((x0, y0), (x1, y1)) in all_segments:    
+        dx = (x1-x0)
+        dy = (y1-y0)
+
+        length = (dx**2 + dy**2)**0.5
+        grad = dy/dx
+
+        # Angle line makes with x axis
+        theta = np.arctan(grad)
+
+        # Length of extra part of line
+        extra = length * perc_tail
+
+        # Get new start and end points of extended segment
+        Dx = extra/np.sin(theta)
+        Dy = extra/np.cos(theta) 
+
+        X0 = int(x0 - Dx)
+        Y0 = int(y0 - Dy)
+        X1 = int(x1 + Dx)
+        Y1 = int(y1 + Dy)
+
+        # Coordinates of line connecting X0, Y0 and X1, Y1
+        new_length = round(length + 2*extra)
+        X, Y = np.linspace(X0, X1, new_length), np.linspace(Y0, Y1, new_length)
+        X = [round(x) for x in X]
+        Y = [round(y) for y in Y]
+        filts = [(x,y) for x,y in zip(X,Y) if all([x>=0, y>=0, x<w, y<h])]
+        X = [x[0] for x in filts]
+        Y = [x[1] for x in filts]
+
+        # the line can be cut short because of matrix boundaries
+        clos0 = closest_node((x0,y0), list(zip(X,Y)))
+        clos1 = closest_node((x1,y1), list(zip(X,Y)))
+
+        new_seg = X_conv[X,Y]>bin_thresh_segment
+        # original segment is always 1
+        new_seg[clos0:clos1+1] = 1
+
+        i0 = clos0
+        i1 = clos1
+        # go backwards through preceeding extension until there are no more
+        # values that correspond to similarity above threshold
+        for i,v in list(enumerate(new_seg))[:clos0][::-1]:
+            if v == 0:
+                i0 = i + 1
+                break
+
+        # go forwards through succeeding extension until there are no more
+        # values that correspond to similarity above threshold
+        for i,v in list(enumerate(new_seg))[clos1:]:
+            if v == 0:
+                i1 = i - 1
+                break
+
+        x0_new = X[i0]
+        y0_new = Y[i0]
+
+        x1_new = X[i1]
+        y1_new = Y[i1]
+
+        ext_segment = [(x0_new, y0_new), (x1_new, y1_new)]
+        all_segments_extended.append(ext_segment)
+
+    return all_segments_extended
 
 
 def get_all_segments(X, peaks, min_diff_trav, min_length_cqt, cqt_window, sr):

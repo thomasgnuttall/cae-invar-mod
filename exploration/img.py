@@ -229,7 +229,7 @@ def plot_hough_new(X, peaks, out_file):
     for _, angle, dist in zip(*peaks):
         (x0, y0) = dist * np.array([np.cos(angle), np.sin(angle)])
         ax.axline((x0, y0), slope=np.tan(angle + np.pi/2), linewidth=0.5, color='red', linestyle='--', alpha=0.7)
-
+        
     plt.tight_layout()
     plt.savefig(out_file)
     plt.clf()
