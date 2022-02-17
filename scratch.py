@@ -17,7 +17,8 @@ from exploration.img import (
     apply_bin_op, make_symmetric, edges_to_contours)
 from exploration.segments import (
     extract_segments_new, get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, 
-    remove_short, extend_segments, compare_segments, join_all_segments)
+    remove_short, extend_segments, compare_segments, join_all_segments, learn_relationships_and_break, 
+    identify_matches)
 from exploration.sequence import (
     apply_exclusions, contains_silence, min_gap, too_stable, 
     convert_seqs_to_timestep, get_stability_mask, add_center_to_mask,
@@ -303,27 +304,113 @@ max_i = len(ordered_segments)-1
 import tqdm
 for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(ordered_segments))):
     for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(ordered_segments):
-        # horizontal pass
-        res = compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict)
-        all_new_segs, max_i, matches_dict = res
 
-        # vertical pass (swap xs and ys)
-        res2 = compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, all_new_segs, max_i, matches_dict)
-        all_new_segs, max_i, matches_dict = res2
+        if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
+            # horizontal pass
+            res = compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict)
+            all_new_segs, max_i, matches_dict = res
 
+        if (Qy0 <= Ry0 <= Qy1) or (Ry0 <= Qy0 <= Ry1):
+            # vertical pass (swap xs and ys)
+            res2 = compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, all_new_segs, max_i, matches_dict)
+            all_new_segs, max_i, matches_dict = res2
 
 old_and_new_segs = {i:((x0,y0), (x1,y1)) for i,((x0,y0), (x1,y1)) in enumerate(ordered_segments + all_new_segs) if is_good_segment(x0, y0, x1, y1, 0.6, silence_and_stable_mask, cqt_window, timestep, sr)}
 
 
 
 
-# join segments that are sufficiently close to each other (if they are small)
-# extend segments to silence
-# remove diagonal from returned patterns
-#all_segments_reduced = [((x0,y0), (x1,y1)) for ((x0,y0), (x1,y1)) in all_segments_reduced if not ((y0-100 < x0 < y0+100) or (x0-100 < y0 < x0+100))]
-#print(f'    {len(all_segments_reduced)} segments not along diagonal')
-# remove duplicates properly
-# within group alignment using dtw
+print('Grouping Segments')
+import tqdm
+
+contains_dict = {}
+is_subset_dict = {}
+shares_common = {}
+matches_dict = {}
+
+new_segments = all_segments_reduced.copy()
+
+print('...learning relationship between (sub)segments')
+for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(all_segments_reduced))):
+    for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(all_segments_reduced):
+        if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
+            # horizontal pass
+            res = learn_relationships_and_break(
+                i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, 
+                new_segments, contains_dict, is_subset_dict, shares_common)
+            new_segments, shares_common, is_subset_dict, contains_dict = res
+
+        if (Qy0 <= Ry0 <= Qy1) or (Ry0 <= Qy0 <= Ry1):
+            # vertical pass (swap xs and ys)
+            res = learn_relationships_and_break(
+                i, j, Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, 
+                new_segments, contains_dict, is_subset_dict, shares_common)
+            new_segments, shares_common, is_subset_dict, contains_dict = res
+
+print('...identifying matches')
+for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(new_segments))):
+    for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(new_segments):
+        if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
+            # horizontal pass
+            matches_dict = identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, matches_dict) 
+
+        if (Qy0 <= Ry0 <= Qy1) or (Ry0 <= Qy0 <= Ry1):
+            # vertical pass (swap xs and ys)
+            matches_dict = identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, matches_dict)
+
+
+segment_ix_dict = {i:((x0,y0), (x1,y1)) for i,((x0,y0), (x1,y1)) in enumerate(new_segments)}
+
+print('...finalising grouping')
+all_groups = matches_dict_to_groups(matches_dict)
+check_groups_unique(all_groups)
+
+all_groups = [[segment_ix_dict[i] for i in ag if i in segment_ix_dict] for ag in all_groups]
+all_groups  = [[((x0,x1),(y0,y1)) for ((x0,y0),(x1,y1)) in ag] for ag in all_groups]
+all_groups  = [sorted([x for y in ag for x in y]) for ag in all_groups]
+
+all_groups = [remove_group_duplicates(g, 0.50) for g in all_groups]
+all_groups = [sorted(ag, key=lambda y:y[0]) for ag in all_groups]
+
+# sort groups
+all_groups = [sorted(arr, key=lambda y: y[0]) for arr in all_groups]
+all_groups = sorted(all_groups, key=lambda y: -len(y))
+all_groups = [x for x in all_groups if len(x) > 0]
+
+
+def same_group(group1, group2, perc_overlap=dupl_perc_overlap):
+    for x0,x1 in group1:
+        for y0,y1 in group2:
+            overlap = do_patterns_overlap(x0, x1, y0, y1, perc_overlap=perc_overlap)
+            if overlap:
+                return True
+
+## Remove those that are identical
+group_match_dict = {}
+for i, ag1 in enumerate(all_groups):
+    for j, ag2 in enumerate(all_groups):
+        if same_group(ag1, ag2):
+            update_dict(group_match_dict, i, j)
+            update_dict(group_match_dict, j, i)
+all_groups_ix = matches_dict_to_groups(group_match_dict)
+all_groups_ix = [list(set(x)) for x in all_groups_ix]
+all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
+all_groups = [remove_group_duplicates(g, 0.50) for g in all_groups]
+
+print(f'    {len(all_groups)} groups found...')
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -1380,3 +1467,4 @@ write_all_sequence_audio(audio_path, starts_seq_cut, lengths_seq_cut, timestep, 
 
 
 
+    

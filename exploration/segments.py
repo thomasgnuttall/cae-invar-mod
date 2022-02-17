@@ -714,6 +714,7 @@ def compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cq
     #   - Q1, Q2, R1 and R2 marked as new segments
 
     """
+
     # functions that define line through query(Q) segment
     Qget_x, Qget_y = line_through_points(Qx0, Qy0, Qx1, Qy1)
     # get indices corresponding to query(Q)
@@ -723,6 +724,7 @@ def compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cq
     Rget_x, Rget_y = line_through_points(Rx0, Ry0, Rx1, Ry1)
     # get indices corresponding to query(Q)
     R_indices = set(range(Rx0, Rx1+1))
+
 
     # query on the left
     if Qx0 <= Rx0:
@@ -1074,6 +1076,280 @@ def join_all_segments(all_segments, min_diff_trav_seq):
         all_segments_joined.append(seg)
     all_segments_joined += [x for i,x in enumerate(all_segments) if i not in to_skip]
     return all_segments_joined
+
+
+def learn_relationships_and_break(
+    i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, 
+    new_segments, contains_dict, is_subset_dict, shares_common):
+
+    # functions that define line through query(Q) segment
+    Qget_x, Qget_y = line_through_points(Qx0, Qy0, Qx1, Qy1)
+    # get indices corresponding to query(Q)
+    Q_indices = set(range(Qx0, Qx1+1))
+
+    # functions that define line through returned(R) segment
+    Rget_x, Rget_y = line_through_points(Rx0, Ry0, Rx1, Ry1)
+    # get indices corresponding to query(Q)
+    R_indices = set(range(Rx0, Rx1+1))
+
+
+    # query on the left
+    if Qx0 <= Rx0:
+        # indices in common between query(Q) and returned(R)
+        left_indices = Q_indices.difference(R_indices)
+        overlap_indices = Q_indices.intersection(R_indices)
+        right_indices = R_indices.difference(Q_indices)
+
+        # which parts in the venn diagram
+        # betweem Q and R are large enough to
+        # be considered
+        left_sig = len(left_indices) >= min_length_cqt
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+        right_sig = len(right_indices) >= min_length_cqt
+
+        # which type of match (if any). 
+        # See above for explanation
+        type_1 = not overlap_indices
+        type_2 = not overlap_sig and overlap_indices
+        type_3 = all([overlap_sig, not left_sig, not right_sig])
+
+        type_4 = all([not left_sig, overlap_sig, right_sig])
+        type_5 = all([left_sig, overlap_sig, not right_sig])
+        type_6 = all([left_sig, overlap_sig, right_sig])
+
+        type_7 = False
+        type_8 = False
+        type_9 = False
+
+    # query on the right
+    else:
+        # indices in common between query(Q) and returned(R)
+        left_indices = R_indices.difference(Q_indices)
+        overlap_indices = R_indices.intersection(Q_indices)
+        right_indices = Q_indices.difference(R_indices)
+
+        # which parts in the venn diagram
+        # betweem Q and R are large enough to
+        # be considered
+        left_sig = len(left_indices) >= min_length_cqt
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+        right_sig = len(right_indices) >= min_length_cqt
+
+        # which type of match (if any). 
+        # See above for explanation
+        type_1 = not overlap_indices
+        type_2 = not overlap_sig and overlap_indices
+        type_3 = all([overlap_sig, not left_sig, not right_sig])
+
+        type_4 = False
+        type_5 = False
+        type_6 = False
+
+        type_7 = all([not left_sig, overlap_sig, right_sig])
+        type_8 = all([left_sig, overlap_sig, not right_sig])
+        type_9 = all([left_sig, overlap_sig, right_sig])
+
+    ###########################
+    ### Create New Segments ###
+    ###########################
+    if type_4 or type_7:
+        x0 = round(min(overlap_indices))
+        x1 = round(max(overlap_indices))
+        y0 = round(Qget_y(x0))
+        y1 = round(Qget_y(x1))
+        overlap_seg = ((x0,y0),(x1,y1))
+        new_segments.append(overlap_seg)
+        
+        # index of new segment
+        Oi = len(new_segments) - 1
+
+        x0 = round(min(right_indices))
+        x1 = round(max(right_indices))
+        y0 = round(Qget_y(x0))
+        y1 = round(Qget_y(x1))
+        right_seg = ((x0,y0),(x1,y1))
+        new_segments.append(right_seg)
+
+        # index of new segment
+        Ri = len(new_segments) - 1
+
+    if type_5 or type_8:
+        x0 = round(min(overlap_indices))
+        x1 = round(max(overlap_indices))
+        y0 = round(Qget_y(x0))
+        y1 = round(Qget_y(x1))
+        overlap_seg = ((x0,y0),(x1,y1))
+        new_segments.append(overlap_seg)
+
+        # index of new segment
+        Oi = len(new_segments) - 1
+
+        x0 = round(min(left_indices))
+        x1 = round(max(left_indices))
+        y0 = round(Qget_y(x0))
+        y1 = round(Qget_y(x1))
+        left_seg = ((x0,y0),(x1,y1))
+        new_segments.append(left_seg)
+
+        # index of new segment
+        Li = len(new_segments) - 1
+
+    if type_6 or type_9:
+        x0 = round(min(overlap_indices))
+        x1 = round(max(overlap_indices))
+        y0 = round(Qget_y(x0))
+        y1 = round(Qget_y(x1))
+        overlap_seg = ((x0,y0),(x1,y1))
+        new_segments.append(overlap_seg)
+
+        # index of new segment
+        Oi = len(new_segments) - 1
+
+        x0 = round(min(left_indices))
+        x1 = round(max(left_indices))
+        y0 = round(Qget_y(x0))
+        y1 = round(Qget_y(x1))
+        left_seg = ((x0,y0),(x1,y1))
+        new_segments.append(left_seg)
+
+        # index of new segment
+        Li = len(new_segments) - 1
+
+        x0 = round(min(right_indices))
+        x1 = round(max(right_indices))
+        y0 = round(Qget_y(x0))
+        y1 = round(Qget_y(x1))
+        right_seg = ((x0,y0),(x1,y1))
+        new_segments.append(right_seg)  
+
+        # index of new segment
+        Ri = len(new_segments) - 1
+
+    ############################
+    ### Record Relationships ###
+    ############################
+    if type_4:
+        update_dict(contains_dict, j, i)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, j, Ri)
+
+        update_dict(is_subset_dict, i, j)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Ri, j)
+
+    if type_5:
+        update_dict(contains_dict, i, j)
+        update_dict(contains_dict, i, Oi)
+        update_dict(contains_dict, i, Li)
+
+        update_dict(is_subset_dict, j, i)
+        update_dict(is_subset_dict, Oi, i)
+        update_dict(is_subset_dict, Li, i)
+
+    if type_6:
+        update_dict(contains_dict, i, Oi)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, i, Li)
+        update_dict(contains_dict, j, Ri)
+
+        update_dict(is_subset_dict, Oi, i)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Li, i)
+        update_dict(is_subset_dict, Ri, j)
+
+        update_dict(shares_common, i, j)
+        update_dict(shares_common, j, i)
+
+    if type_7:
+        update_dict(contains_dict, j, i)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, j, Ri)
+
+        update_dict(is_subset_dict, i, j)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Ri, j)
+
+    if type_8:
+        update_dict(contains_dict, j, j)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, j, Li)
+
+        update_dict(is_subset_dict, j, j)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Li, j)
+
+    if type_9:
+        update_dict(contains_dict, i, Oi)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, j, Li)
+        update_dict(contains_dict, i, Ri)
+
+        update_dict(is_subset_dict, Oi, i)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Li, j)
+        update_dict(is_subset_dict, Ri, i)
+
+        update_dict(shares_common, i, j)
+        update_dict(shares_common, j, i)
+
+    return new_segments, shares_common, is_subset_dict, contains_dict
+
+
+def identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, matches_dict):
+
+    # get indices corresponding to query(Q)
+    Q_indices = set(range(Qx0, Qx1+1))
+
+    # get indices corresponding to query(Q)
+    R_indices = set(range(Rx0, Rx1+1))
+
+    # query on the left
+    if Qx0 <= Rx0:
+        # indices in common between query(Q) and returned(R)
+        left_indices = Q_indices.difference(R_indices)
+        overlap_indices = Q_indices.intersection(R_indices)
+        right_indices = R_indices.difference(Q_indices)
+
+        # which parts in the venn diagram
+        # betweem Q and R are large enough to
+        # be considered
+        left_sig = len(left_indices) >= min_length_cqt
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+        right_sig = len(right_indices) >= min_length_cqt
+
+    # query on the right
+    else:
+        # indices in common between query(Q) and returned(R)
+        left_indices = R_indices.difference(Q_indices)
+        overlap_indices = R_indices.intersection(Q_indices)
+        right_indices = Q_indices.difference(R_indices)
+
+        # which parts in the venn diagram
+        # betweem Q and R are large enough to
+        # be considered
+        left_sig = len(left_indices) >= min_length_cqt
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+        right_sig = len(right_indices) >= min_length_cqt
+
+    if all([overlap_sig, not left_sig, not right_sig]):
+        update_dict(matches_dict, i, j)
+        update_dict(matches_dict, j, i)
+
+    return matches_dict
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

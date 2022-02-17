@@ -1,82 +1,25 @@
+def identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt):
 
-print('Cleaning isolated non-directional regions using morphological opening')
-X_binop = apply_bin_op(X_fill, binop_dim)
+    # get indices corresponding to query(Q)
+    Q_indices = set(range(Qx0, Qx1+1))
 
-# clean up
+    # get indices corresponding to query(Q)
+    R_indices = set(range(Rx0, Rx1+1))
 
+    # query on the left
+    if Qx0 <= Rx0:
+        # indices in common between query(Q) and returned(R)
+        overlap_indices = Q_indices.intersection(R_indices)
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+    # query on the right
+    else:
+        # indices in common between query(Q) and returned(R)
+        overlap_indices = R_indices.intersection(Q_indices)
+        overlap_sig = len(overlap_indices) >= min_length_cqt
 
-#   pool = Pool(os.cpu_count())
+    if overlap_sig:
+        update_dict(match_dict, i, j)
+        update_dict(match_dict, j, i)
 
-#   # Add your data to the datasplit variable below:
-#   indices = [(i,j) for i,j in itertools.combinations(range(h),r=2) if i <= j]
-
-#   results = pool.map(lambda i,j: get_centered_array(X_cont, i, j, filter_size), indices)
-
-#   pool.close()
-#   pool.join()
-
-#   from multiprocessing import Pool
-#   import os
-#   import numpy as np
-#   import tqdm
-
-#   def get_centered_array(X, x, y, s):
-#       """
-#       Return <s>x<s> array centered on <x> and <y> in <X>
-#       Any part of returned array that exists outside of <X>
-#       is be filled with nans
-#       """
-#       o, r = np.divmod(s, 2)
-#       l = (x-(o+r-1)).clip(0)
-#       u = (y-(o+r-1)).clip(0)
-#       X_ = X[l: x+o+1, u:y+o+1]
-#       out = np.full((s, s), np.nan, dtype=X.dtype)
-#       out[:X_.shape[0], :X_.shape[1]] = X_
-#       return out
-
-
-#   def is_surrounded(X):
-#       """
-#       Is the center square in x sufficiently surrounded by 
-#       non zero 
-#       """
-#       triu = np.triu(X)
-#       tril = np.tril(X)
-#       np.fill_diagonal(triu, 0)
-#       np.fill_diagonal(tril, 0)
-#       return 1 in triu and 1 in tril
-
-
-#   filter_size = 3
-
-#   h, w = X_cont.shape
-
-#   X_fill = np.zeros((h, w))
-
-#   for i in tqdm.tqdm(range(h)):
-#       for j in range(w):
-#           if i < j:
-#               continue            
-#           cent_X = get_centered_array(X_cont, i, j, filter_size)
-#           if is_surrounded(cent_X):
-#               X_fill[i,j] = 1
-
-
-#   X_fill = X_fill + X_fill.T - np.diag(np.diag(X_fill))
-
-#   if save_imgs:
-#       skimage.io.imsave(merg_filename, X_fill)
-
-
-print('Applying Hough Transform')
-peaks = hough_transform_new(X_fill, hough_high_angle, hough_low_angle, hough_threshold, filename=hough_filename)
-
-#sprint('Averaging very close Hough lines')
-#X_fill, averaged_peaks  = group_and_fill_hough(X_cont, peaks, merg_filename)
-
-#shough_filename = os.path.join(out_dir, '7_Koti Janmani_hough.png') if save_imgs else None
-#shough_av_filename = os.path.join(out_dir, '7b_Koti Janmani_hough_av.png') if save_imgs else None
-
-#splot_hough_new(X_cont, peaks, hough_filename)
-#splot_hough_new(X_cont, averaged_peaks, hough_av_filename)
+    return match_dict
 
