@@ -317,8 +317,11 @@ def extend_segments(all_segments, X_in, X_conv, perc_tail, bin_thresh_segment):
 
         # go forwards through succeeding extension until there are no more
         # values that correspond to similarity above threshold
+        accum = 0
         for i,v in list(enumerate(new_seg))[clos1:]:
             if v == 0:
+                accum += 1
+            if accum == 3: # roughly 0.1 seconds of zero values signifies break point
                 i1 = i - 1
                 break
 
@@ -632,28 +635,48 @@ def is_good_segment(x0, y0, x1, y1, thresh, silence_and_stable_mask, cqt_window,
     prop_stab1 = sum(seq1_stab!=0) / len(seq1_stab)
     prop_stab2 = sum(seq2_stab!=0) / len(seq2_stab)
 
-    if not (prop_stab1 > 0.6 or prop_stab2 > 0.6):
+    if not (prop_stab1 > thresh or prop_stab2 > thresh):
         return True
     else:
         return False
 
 
+#def matches_dict_to_groups(matches_dict):
+#    all_groups = []
+#    for i, matches in matches_dict.items():
+#        this_group = [i] + matches
+#        for j,ag in enumerate(all_groups):
+#            if set(this_group).intersection(set(ag)):
+#                # group exists, append
+#                all_groups[j] = list(set(all_groups[j] + this_group))
+#                break
+#            # group doesnt exist yet
+#            all_groups.append(this_group)
+#    return all_groups
+
 def matches_dict_to_groups(matches_dict):
-    all_groups = []
-    c=0
-    for i, matches in matches_dict.items():
-        this_group = [i] + matches
-        for j,ag in enumerate(all_groups):
-            if set(this_group).intersection(set(ag)):
-                # group exists, append
-                all_groups[j] = list(set(all_groups[j] + this_group))
-                c = 1
-                break
-        if c==0:
-            # group doesnt exist yet
-            all_groups.append(this_group)
-        c=0
-    return all_groups
+    l = [list(set([k]+v)) for k,v in matches_dict.items()]
+    out = []
+    while len(l)>0:
+        first, *rest = l
+        first = set(first)
+
+        lf = -1
+        while len(first)>lf:
+            lf = len(first)
+
+            rest2 = []
+            for r in rest:
+                if len(first.intersection(set(r)))>0:
+                    first |= set(r)
+                else:
+                    rest2.append(r)     
+            rest = rest2
+
+        out.append(first)
+        l = rest
+
+    return [list(o) for o in out]
 
 
 def check_groups_unique(all_groups):
@@ -666,348 +689,6 @@ def check_groups_unique(all_groups):
                 print(f"groups {i} and {j} intersect")
                 repl = False
     return repl
-
-
-def compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict):
-    """
-    # Types of matches for two sequences: 
-    #       query (Q):(------) and returned (R):[-------]
-    # 1. (------) [------] - no match
-    #   - Do nothing
-    # 2. (-----[-)-----] - insignificant overlap
-    #   - Do nothing
-    # 3. (-[------)-] - left not significant, overlap significant, right not significant
-    #   - Group Q and R
-
-
-    # Query is on the left: Qx0 < Rx0
-    #################################
-    # 4. (-[-------)--------] - left not significant, overlap significant, right significant
-    #   - Cut R to create R1 and R2 (where R1+R2 = R)
-    #   - Add R1 and Q to group
-    #   - R2 and R1 marked as new segments
-    # 5. (---------[------)-] - left significant, overlap significant, right not significant
-    #   - Cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
-    #   - Add Q2 and R to group
-    #   - Q1 and Q2 marked as new segments
-    # 6. (---------[------)-------] - left significant, overlap significant, right significant
-    #   - cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
-    #   - cut R to create R1 and R2 (where R1+R2 = R)
-    #   - Add Q2 and R1 to group
-    #   - Q1, Q2, R1 and R2 marked as new segments
-
-
-    # Query is on the left: Rx0 < Qx0
-    #################################
-    # 7. [-(-------]--------) - left not significant, overlap significant, right significant
-    #   - Cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
-    #   - Add R and Q1 to group
-    #   - Q1 and Q2 marked as new segments
-    # 8. [---------(------]-) - left significant, overlap significant, right not significant
-    #   - Cut R to create R1 and R2 (where R1+R2 = R)
-    #   - Add R2 and Q to group
-    #   - R1 and R2 marked as new segments
-    # 9. [---------(------]-------) - left significant, overlap significant, right significant
-    #   - cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
-    #   - cut R to create R1 and R2 (where R1+R2 = R)
-    #   - Add R2 and Q1 to group
-    #   - Q1, Q2, R1 and R2 marked as new segments
-
-    """
-
-    # functions that define line through query(Q) segment
-    Qget_x, Qget_y = line_through_points(Qx0, Qy0, Qx1, Qy1)
-    # get indices corresponding to query(Q)
-    Q_indices = set(range(Qx0, Qx1+1))
-
-    # functions that define line through returned(R) segment
-    Rget_x, Rget_y = line_through_points(Rx0, Ry0, Rx1, Ry1)
-    # get indices corresponding to query(Q)
-    R_indices = set(range(Rx0, Rx1+1))
-
-
-    # query on the left
-    if Qx0 <= Rx0:
-        # indices in common between query(Q) and returned(R)
-        left_indices = Q_indices.difference(R_indices)
-        overlap_indices = Q_indices.intersection(R_indices)
-        right_indices = R_indices.difference(Q_indices)
-
-        # which parts in the venn diagram
-        # betweem Q and R are large enough to
-        # be considered
-        left_sig = len(left_indices) >= min_length_cqt
-        overlap_sig = len(overlap_indices) >= min_length_cqt
-        right_sig = len(right_indices) >= min_length_cqt
-
-        # which type of match (if any). 
-        # See above for explanation
-        type_1 = not overlap_indices
-        type_2 = not overlap_sig and overlap_indices
-        type_3 = all([overlap_sig, not left_sig, not right_sig])
-
-        type_4 = all([not left_sig, overlap_sig, right_sig])
-        type_5 = all([left_sig, overlap_sig, not right_sig])
-        type_6 = all([left_sig, overlap_sig, right_sig])
-
-        type_7 = False
-        type_8 = False
-        type_9 = False
-
-    # query on the right
-    if Rx0 < Qx0:
-        # indices in common between query(Q) and returned(R)
-        left_indices = R_indices.difference(Q_indices)
-        overlap_indices = R_indices.intersection(Q_indices)
-        right_indices = Q_indices.difference(R_indices)
-
-        # which parts in the venn diagram
-        # betweem Q and R are large enough to
-        # be considered
-        left_sig = len(left_indices) >= min_length_cqt
-        overlap_sig = len(overlap_indices) >= min_length_cqt
-        right_sig = len(right_indices) >= min_length_cqt
-
-        # which type of match (if any). 
-        # See above for explanation
-        type_1 = not overlap_indices
-        type_2 = not overlap_sig and overlap_indices
-        type_3 = all([overlap_sig, not left_sig, not right_sig])
-
-        type_4 = False
-        type_5 = False
-        type_6 = False
-
-        type_7 = all([not left_sig, overlap_sig, right_sig])
-        type_8 = all([left_sig, overlap_sig, not right_sig])
-        type_9 = all([left_sig, overlap_sig, right_sig])
-
-    if type_3:
-        # record match, no further action
-        update_dict(matches_dict, i, j)
-        update_dict(matches_dict, j, i)
-
-    if type_4:
-
-        # Split R into two patterns
-        # that which intersects with
-        # Q....
-        R1x0 = min(overlap_indices)
-        R1x1 = max(overlap_indices)
-        R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
-        R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
-        R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
-
-        # And that part which does 
-        # not intersect with Q...
-        R2x0 = min(right_indices)
-        R2x1 = max(right_indices)
-        R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
-        R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
-        R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
-        
-        # Log new R1 seg and group with Q
-        max_i += 1
-        all_new_segs.append(R1_seg)
-        update_dict(matches_dict, i, max_i)
-        update_dict(matches_dict, max_i, i)
-        
-        # Log new R2 seg
-        max_i += 1
-        all_new_segs.append(R2_seg)
-
-    if type_5:
-
-        # Split Q into two patterns
-        # that which does not intersects
-        # with R....
-        Q1x0 = min(left_indices)
-        Q1x1 = max(left_indices)
-        Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
-        Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
-        Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
-
-        # And that part which does 
-        # intersect with R...
-        Q2x0 = min(overlap_indices)
-        Q2x1 = max(overlap_indices)
-        Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
-        Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
-        Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1))
-        
-        # Log new Q2 seg and group with R
-        max_i += 1
-        all_new_segs.append(Q2_seg)
-        update_dict(matches_dict, j, max_i)
-        update_dict(matches_dict, max_i, j)
-        
-        # Log new Q1 seg
-        max_i += 1
-        all_new_segs.append(Q1_seg)
-
-    if type_6:
-        
-        # Split Q into two patterns
-        # that which does not intersect
-        #  with R....
-        Q1x0 = min(left_indices)
-        Q1x1 = max(left_indices)
-        Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
-        Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
-        Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
-
-        # And that part which does 
-        # intersect with R...
-        Q2x0 = min(overlap_indices)
-        Q2x1 = max(overlap_indices)
-        Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
-        Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
-        Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1)) 
-
-        # Split R into two patterns
-        # that which intersects with
-        # Q....
-        R1x0 = min(overlap_indices)
-        R1x1 = max(overlap_indices)
-        R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
-        R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
-        R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
-
-        # And that part which does 
-        # not intersect with Q...
-        R2x0 = min(right_indices)
-        R2x1 = max(right_indices)
-        R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
-        R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
-        R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
-
-        # Log new Q2/R1 seg and group
-        max_i += 1
-        all_new_segs.append(Q2_seg)
-        update_dict(matches_dict, max_i, max_i+1)
-        update_dict(matches_dict, max_i+1, max_i)
-        max_i += 1
-        all_new_segs.append(R1_seg)
-        
-        # Log new Q1 seg
-        max_i += 1
-        all_new_segs.append(Q1_seg)
-        
-        # log new R2 seg
-        max_i += 1
-        all_new_segs.append(R2_seg)
-
-    if type_7:
-
-        # Split Q into two patterns
-        # that which intersects with
-        # R....
-        Q1x0 = min(overlap_indices)
-        Q1x1 = max(overlap_indices)
-        Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
-        Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
-        Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
-
-        # And that part which does 
-        # not intersect with Q...
-        Q2x0 = min(right_indices)
-        Q2x1 = max(right_indices)
-        Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
-        Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
-        Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1))
-        
-        # Log new Q1 seg and group with R
-        max_i += 1
-        all_new_segs.append(Q1_seg)
-        update_dict(matches_dict, j, max_i)
-        update_dict(matches_dict, max_i, j)
-        
-        # Log new Q2 seg
-        max_i += 1
-        all_new_segs.append(Q2_seg)
-
-    if type_8:
-
-        # Split R into two patterns
-        # that which does not intersects
-        # with Q....
-        R1x0 = min(left_indices)
-        R1x1 = max(left_indices)
-        R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
-        R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
-        R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
-
-        # And that part which does 
-        # intersect with Q...
-        R2x0 = min(overlap_indices)
-        R2x1 = max(overlap_indices)
-        R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
-        R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
-        R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
-        
-        # Log new R2 seg and group with Q
-        max_i += 1
-        all_new_segs.append(R2_seg)
-        update_dict(matches_dict, i, max_i)
-        update_dict(matches_dict, max_i, i)
-        
-        # Log new R1 seg
-        max_i += 1
-        all_new_segs.append(R1_seg)
-
-    if type_9:
-        
-        # Split Q into two patterns
-        # that which does not intersect
-        #  with R....
-        Q1x0 = min(right_indices)
-        Q1x1 = max(right_indices)
-        Q1y0 = round(Qget_y(Q1x0)) # extrapolate segment for corresponding y
-        Q1y1 = round(Qget_y(Q1x1)) # extrapolate segment for corresponding y
-        Q1_seg = ((Q1x0, Q1y0), (Q1x1, Q1y1))
-
-        # And that part which does 
-        # intersect with R...
-        Q2x0 = min(overlap_indices)
-        Q2x1 = max(overlap_indices)
-        Q2y0 = round(Qget_y(Q2x0)) # extrapolate segment for corresponding y
-        Q2y1 = round(Qget_y(Q2x1)) # extrapolate segment for corresponding y
-        Q2_seg = ((Q2x0, Q2y0), (Q2x1, Q2y1)) 
-
-        # Split R into two patterns
-        # that which intersects with
-        # Q....
-        R1x0 = min(overlap_indices)
-        R1x1 = max(overlap_indices)
-        R1y0 = round(Rget_y(R1x0)) # extrapolate segment for corresponding y
-        R1y1 = round(Rget_y(R1x1)) # extrapolate segment for corresponding y
-        R1_seg = ((R1x0, R1y0), (R1x1, R1y1))
-
-        # And that part which does 
-        # not intersect with Q...
-        R2x0 = min(left_indices)
-        R2x1 = max(left_indices)
-        R2y0 = round(Rget_y(R2x0)) # extrapolate segment for corresponding y
-        R2y1 = round(Rget_y(R2x1)) # extrapolate segment for corresponding y
-        R2_seg = ((R2x0, R2y0), (R2x1, R2y1))
-
-        # Log new R2/Q1 seg and group
-        max_i += 1
-        all_new_segs.append(R2_seg)
-        update_dict(matches_dict, max_i, max_i+1)
-        update_dict(matches_dict, max_i+1, max_i)
-        max_i += 1
-        all_new_segs.append(Q1_seg)
-        
-        # Log new R1 seg
-        max_i += 1
-        all_new_segs.append(R1_seg)
-        
-        # log new Q2 seg
-        max_i += 1
-        all_new_segs.append(Q2_seg)
-    
-    return all_new_segs, max_i, matches_dict
 
 
 def update_dict(d, k, v):
@@ -1078,10 +759,54 @@ def join_all_segments(all_segments, min_diff_trav_seq):
     return all_segments_joined
 
 
-def learn_relationships_and_break(
+def learn_relationships_and_break_x(
     i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, 
     new_segments, contains_dict, is_subset_dict, shares_common):
+    """
+    # Types of matches for two sequences: 
+    #       query (Q):(------) and returned (R):[-------]
+    # 1. (------) [------] - no match
+    #   - Do nothing
+    # 2. (-----[-)-----] - insignificant overlap
+    #   - Do nothing
+    # 3. (-[------)-] - left not significant, overlap significant, right not significant
+    #   - Group Q and R
 
+
+    # Query is on the left: Qx0 < Rx0
+    #################################
+    # 4. (-[-------)--------] - left not significant, overlap significant, right significant
+    #   - Cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R1 and Q to group
+    #   - R2 and R1 marked as new segments
+    # 5. (---------[------)-] - left significant, overlap significant, right not significant
+    #   - Cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - Add Q2 and R to group
+    #   - Q1 and Q2 marked as new segments
+    # 6. (---------[------)-------] - left signeificant, overlap significant, right significant
+    #   - cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add Q2 and R1 to group
+    #   - Q1, Q2, R1 and R2 marked as new segments
+
+
+    # Query is on the left: Rx0 < Qx0
+    #################################
+    # 7. [-(-------]--------) - left not significant, overlap significant, right significant
+    #   - Cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - Add R and Q1 to group
+    #   - Q1 and Q2 marked as new segments
+    # 8. [---------(------]-) - left significant, overlap significant, right not significant
+    #   - Cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R2 and Q to group
+    #   - R1 and R2 marked as new segments
+    # 9. [---------(------]-------) - left significant, overlap significant, right significant
+    #   - cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R2 and Q1 to group
+    #   - Q1, Q2, R1 and R2 marked as new segments
+
+    """
     # functions that define line through query(Q) segment
     Qget_x, Qget_y = line_through_points(Qx0, Qy0, Qx1, Qy1)
     # get indices corresponding to query(Q)
@@ -1152,6 +877,14 @@ def learn_relationships_and_break(
     ###########################
     ### Create New Segments ###
     ###########################
+    if type_3:
+        x0 = round(min(overlap_indices))
+        x1 = round(max(overlap_indices))
+        y0 = round(Qget_y(x0))
+        y1 = round(Qget_y(x1))
+        overlap_seg = ((x0,y0),(x1,y1))
+        new_segments.append(overlap_seg)
+
     if type_4 or type_7:
         x0 = round(min(overlap_indices))
         x1 = round(max(overlap_indices))
@@ -1295,16 +1028,67 @@ def learn_relationships_and_break(
     return new_segments, shares_common, is_subset_dict, contains_dict
 
 
-def identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, matches_dict):
+def learn_relationships_and_break_y(
+    i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, 
+    new_segments, contains_dict, is_subset_dict, shares_common):
+    """
+    # Types of matches for two sequences: 
+    #       query (Q):(------) and returned (R):[-------]
+    # 1. (------) [------] - no match
+    #   - Do nothing
+    # 2. (-----[-)-----] - insignificant overlap
+    #   - Do nothing
+    # 3. (-[------)-] - left not significant, overlap significant, right not significant
+    #   - Group Q and R
 
-    # get indices corresponding to query(Q)
-    Q_indices = set(range(Qx0, Qx1+1))
 
+    # Query is on the left: Qx0 < Rx0
+    #################################
+    # 4. (-[-------)--------] - left not significant, overlap significant, right significant
+    #   - Cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R1 and Q to group
+    #   - R2 and R1 marked as new segments
+    # 5. (---------[------)-] - left significant, overlap significant, right not significant
+    #   - Cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - Add Q2 and R to group
+    #   - Q1 and Q2 marked as new segments
+    # 6. (---------[------)-------] - left significant, overlap significant, right significant
+    #   - cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add Q2 and R1 to group
+    #   - Q1, Q2, R1 and R2 marked as new segments
+
+
+    # Query is on the left: Rx0 < Qx0
+    #################################
+    # 7. [-(-------]--------) - left not significant, overlap significant, right significant
+    #   - Cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - Add R and Q1 to group
+    #   - Q1 and Q2 marked as new segments
+    # 8. [---------(------]-) - left significant, overlap significant, right not significant
+    #   - Cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R2 and Q to group
+    #   - R1 and R2 marked as new segments
+    # 9. [---------(------]-------) - left significant, overlap significant, right significant
+    #   - cut Q to create Q1 and Q2 (where Q1+Q2 = Q)
+    #   - cut R to create R1 and R2 (where R1+R2 = R)
+    #   - Add R2 and Q1 to group
+    #   - Q1, Q2, R1 and R2 marked as new segments
+
+    """
+    # functions that define line through query(Q) segment
+    Qget_x, Qget_y = line_through_points(Qx0, Qy0, Qx1, Qy1)
     # get indices corresponding to query(Q)
-    R_indices = set(range(Rx0, Rx1+1))
+    Q_indices = set(range(Qy0, Qy1+1))
+
+    # functions that define line through returned(R) segment
+    Rget_x, Rget_y = line_through_points(Rx0, Ry0, Rx1, Ry1)
+    # get indices corresponding to query(Q)
+    R_indices = set(range(Ry0, Ry1+1))
+
 
     # query on the left
-    if Qx0 <= Rx0:
+    if Ry0 <= Qy0:
         # indices in common between query(Q) and returned(R)
         left_indices = Q_indices.difference(R_indices)
         overlap_indices = Q_indices.intersection(R_indices)
@@ -1316,6 +1100,20 @@ def identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cq
         left_sig = len(left_indices) >= min_length_cqt
         overlap_sig = len(overlap_indices) >= min_length_cqt
         right_sig = len(right_indices) >= min_length_cqt
+
+        # which type of match (if any). 
+        # See above for explanation
+        type_1 = not overlap_indices
+        type_2 = not overlap_sig and overlap_indices
+        type_3 = all([overlap_sig, not left_sig, not right_sig])
+
+        type_4 = all([not left_sig, overlap_sig, right_sig])
+        type_5 = all([left_sig, overlap_sig, not right_sig])
+        type_6 = all([left_sig, overlap_sig, right_sig])
+
+        type_7 = False
+        type_8 = False
+        type_9 = False
 
     # query on the right
     else:
@@ -1331,6 +1129,231 @@ def identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cq
         overlap_sig = len(overlap_indices) >= min_length_cqt
         right_sig = len(right_indices) >= min_length_cqt
 
+        # which type of match (if any). 
+        # See above for explanation
+        type_1 = not overlap_indices
+        type_2 = not overlap_sig and overlap_indices
+        type_3 = all([overlap_sig, not left_sig, not right_sig])
+
+        type_4 = False
+        type_5 = False
+        type_6 = False
+
+        type_7 = all([not left_sig, overlap_sig, right_sig])
+        type_8 = all([left_sig, overlap_sig, not right_sig])
+        type_9 = all([left_sig, overlap_sig, right_sig])
+
+    ###########################
+    ### Create New Segments ###
+    ###########################
+    if type_3:
+        y0 = round(min(overlap_indices))
+        y1 = round(max(overlap_indices))
+        x0 = round(Qget_x(y0))
+        x1 = round(Qget_x(y1))
+        overlap_seg = ((x0,y0),(x1,y1))
+        new_segments.append(overlap_seg)
+
+
+    if type_4 or type_7:
+        y0 = round(min(overlap_indices))
+        y1 = round(max(overlap_indices))
+        x0 = round(Qget_x(y0))
+        x1 = round(Qget_x(y1))
+        overlap_seg = ((x0,y0),(x1,y1))
+        new_segments.append(overlap_seg)
+        
+        # index of new segment
+        Oi = len(new_segments) - 1
+
+        y0 = round(min(right_indices))
+        y1 = round(max(right_indices))
+        x0 = round(Qget_x(y0))
+        x1 = round(Qget_x(y1))
+        right_seg = ((x0,y0),(x1,y1))
+        new_segments.append(right_seg)
+
+        # index of new segment
+        Ri = len(new_segments) - 1
+
+    if type_5 or type_8:
+        y0 = round(min(overlap_indices))
+        y1 = round(max(overlap_indices))
+        x0 = round(Qget_x(y0))
+        x1 = round(Qget_x(y1))
+        overlap_seg = ((x0,y0),(x1,y1))
+        new_segments.append(overlap_seg)
+
+        # index of new segment
+        Oi = len(new_segments) - 1
+
+        y0 = round(min(left_indices))
+        y1 = round(max(left_indices))
+        x0 = round(Qget_x(y0))
+        x1 = round(Qget_x(y1))
+        left_seg = ((x0,y0),(x1,y1))
+        new_segments.append(left_seg)
+
+        # index of new segment
+        Li = len(new_segments) - 1
+
+    if type_6 or type_9:
+        y0 = round(min(overlap_indices))
+        y1 = round(max(overlap_indices))
+        x0 = round(Qget_x(y0))
+        x1 = round(Qget_x(y1))
+        overlap_seg = ((x0,y0),(x1,y1))
+        new_segments.append(overlap_seg)
+
+        # index of new segment
+        Oi = len(new_segments) - 1
+
+        y0 = round(min(left_indices))
+        y1 = round(max(left_indices))
+        x0 = round(Qget_x(y0))
+        x1 = round(Qget_x(y1))
+        left_seg = ((x0,y0),(x1,y1))
+        new_segments.append(left_seg)
+
+        # index of new segment
+        Li = len(new_segments) - 1
+
+        y0 = round(min(right_indices))
+        y1 = round(max(right_indices))
+        x0 = round(Qget_x(y0))
+        x1 = round(Qget_x(y1))
+        right_seg = ((x0,y0),(x1,y1))
+        new_segments.append(right_seg)  
+
+        # index of new segment
+        Ri = len(new_segments) - 1
+
+    ############################
+    ### Record Relationships ###
+    ############################
+    if type_4:
+        update_dict(contains_dict, j, i)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, j, Ri)
+
+        update_dict(is_subset_dict, i, j)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Ri, j)
+
+    if type_5:
+        update_dict(contains_dict, i, j)
+        update_dict(contains_dict, i, Oi)
+        update_dict(contains_dict, i, Li)
+
+        update_dict(is_subset_dict, j, i)
+        update_dict(is_subset_dict, Oi, i)
+        update_dict(is_subset_dict, Li, i)
+
+    if type_6:
+        update_dict(contains_dict, i, Oi)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, i, Li)
+        update_dict(contains_dict, j, Ri)
+
+        update_dict(is_subset_dict, Oi, i)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Li, i)
+        update_dict(is_subset_dict, Ri, j)
+
+        update_dict(shares_common, i, j)
+        update_dict(shares_common, j, i)
+
+    if type_7:
+        update_dict(contains_dict, j, i)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, j, Ri)
+
+        update_dict(is_subset_dict, i, j)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Ri, j)
+
+    if type_8:
+        update_dict(contains_dict, j, j)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, j, Li)
+
+        update_dict(is_subset_dict, j, j)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Li, j)
+
+    if type_9:
+        update_dict(contains_dict, i, Oi)
+        update_dict(contains_dict, j, Oi)
+        update_dict(contains_dict, j, Li)
+        update_dict(contains_dict, i, Ri)
+
+        update_dict(is_subset_dict, Oi, i)
+        update_dict(is_subset_dict, Oi, j)
+        update_dict(is_subset_dict, Li, j)
+        update_dict(is_subset_dict, Ri, i)
+
+        update_dict(shares_common, i, j)
+        update_dict(shares_common, j, i)
+
+    return new_segments, shares_common, is_subset_dict, contains_dict
+
+
+def learn_relationships(all_segments, min_length_cqt):
+    contains_dict = {}
+    is_subset_dict = {}
+    shares_common = {}
+
+    new_segments = []
+
+    
+    for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(all_segments))):
+        for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(all_segments): 
+            if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
+                # horizontal pass
+                res = learn_relationships_and_break_x(
+                    i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, 
+                    new_segments, contains_dict, is_subset_dict, shares_common)
+                new_segments, shares_common, is_subset_dict, contains_dict = res
+
+            if (Qy0 <= Ry0 <= Qy1) or (Ry0 <= Qy0 <= Ry1):
+                # vertical pass (swap xs and ys)
+                res = learn_relationships_and_break_y(
+                    i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, 
+                    new_segments, contains_dict, is_subset_dict, shares_common)
+                new_segments, shares_common, is_subset_dict, contains_dict = res
+    return new_segments, contains_dict, is_subset_dict, shares_common
+
+
+def identify_matches_x(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, tol, matches_dict):
+
+    # get indices corresponding to query(Q)
+    Q_indices = set(range(Qx0, Qx1+1))
+
+    # get indices corresponding to returned(R)
+    R_indices = set(range(Rx0, Rx1+1))
+
+    # query on the left
+    if Qx0 <= Rx0:
+        # indices in common between query(Q) and returned(R)
+        left_indices = Q_indices.difference(R_indices)
+        overlap_indices = Q_indices.intersection(R_indices)
+        right_indices = R_indices.difference(Q_indices)
+
+    # query on the right
+    else:
+        # indices in common between query(Q) and returned(R)
+        left_indices = R_indices.difference(Q_indices)
+        overlap_indices = R_indices.intersection(Q_indices)
+        right_indices = Q_indices.difference(R_indices)
+
+    # which parts in the venn diagram
+    # betweem Q and R are large enough to
+    # be considered
+    left_sig = len(left_indices) > tol
+    overlap_sig = len(overlap_indices) >= min_length_cqt
+    right_sig = len(right_indices) > tol
+
+    # exact matches only, relationships are captured previously
     if all([overlap_sig, not left_sig, not right_sig]):
         update_dict(matches_dict, i, j)
         update_dict(matches_dict, j, i)
@@ -1338,15 +1361,163 @@ def identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cq
     return matches_dict
 
 
+def identify_matches_y(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, tol, matches_dict):
+
+    # get indices corresponding to query(Q)
+    Q_indices = set(range(Qy0, Qy1+1))
+
+    # get indices corresponding to returned(R)
+    R_indices = set(range(Ry0, Ry1+1))
+
+    # query on the left
+    if Ry0 <= Qy0:
+        # indices in common between query(Q) and returned(R)
+        left_indices = Q_indices.difference(R_indices)
+        overlap_indices = Q_indices.intersection(R_indices)
+        right_indices = R_indices.difference(Q_indices)
+
+        # which parts in the venn diagram
+        # betweem Q and R are large enough to
+        # be considered
+        left_sig = len(left_indices) > tol
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+        right_sig = len(right_indices) > tol
+
+    # query on the right
+    else:
+        # indices in common between query(Q) and returned(R)
+        left_indices = R_indices.difference(Q_indices)
+        overlap_indices = R_indices.intersection(Q_indices)
+        right_indices = Q_indices.difference(R_indices)
+
+        # which parts in the venn diagram
+        # betweem Q and R are large enough to
+        # be considered
+        left_sig = len(left_indices) > tol
+        overlap_sig = len(overlap_indices) >= min_length_cqt
+        right_sig = len(right_indices) > tol
+
+    # exact matches only, relationships are captured previously
+    if all([overlap_sig, not left_sig, not right_sig]):
+        update_dict(matches_dict, i, j)
+        update_dict(matches_dict, j, i)
+
+    return matches_dict
+
+
+def get_matches_dict(new_segments, min_length_cqt, match_tol):
+    matches_dict = {}
+    for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(new_segments))):
+        for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(new_segments):
+            if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
+                # horizontal pass
+                matches_dict = identify_matches_x(
+                    i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, 
+                    Ry1, min_length_cqt, match_tol, matches_dict) 
+
+            if (Qy0 <= Ry0 <= Qy1) or (Ry0 <= Qy0 <= Ry1):
+                # vertical pass (swap xs and ys)
+                matches_dict = identify_matches_y(
+                    i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, 
+                    Ry1, min_length_cqt, match_tol, matches_dict) 
+
+    return matches_dict
+
+
+def get_segment_grouping(new_segments, matches_dict, silence_and_stable_mask, cqt_window, timestep, sr)
+
+    segment_ix_dict = {i:((x0,y0), (x1,y1)) for i,((x0,y0), (x1,y1)) in enumerate(new_segments) \
+                        if is_good_segment(x0, y0, x1, y1, 0.6, silence_and_stable_mask, cqt_window, timestep, sr)}
+
+    print('...finalising grouping\n')
+    all_groups = matches_dict_to_groups(matches_dict)
+    check_groups_unique(all_groups)
+
+    all_groups = [[segment_ix_dict[i] for i in ag if i in segment_ix_dict] for ag in all_groups]
+    all_groups  = [[((x0,x1),(y0,y1)) for ((x0,y0),(x1,y1)) in ag] for ag in all_groups]
 
 
 
+    all_groups  = [sorted([x for y in ag for x in y]) for ag in all_groups]
+
+    all_groups = [sorted(ag, key=lambda y:y[0]) for ag in all_groups]
+
+    all_groups = sorted(all_groups, key=lambda y: -len(y))
+    all_groups = [x for x in all_groups if len(x) > 0]
+    all_groups = [remove_group_duplicates(g, 0.01) for g in all_groups]
+
+    return all_groups
 
 
+def group_segments(all_segments_reduced, min_length_cqt, match_tol, silence_and_stable_mask, cqt_window, timestep, sr):
+    print('...learning relationship between (sub)segments\n')
+    new_segments, contains_dict, is_subset_dict, shares_common = learn_relationships(all_segments_reduced, min_length_cqt)
+
+    print('...identifying matches\n')
+    matches_dict = get_matches_dict(new_segments, min_length_cqt, match_tol)
+    
+    print('...identifying matches\n')
+    all_groups = get_segment_grouping(new_segments, matches_dict, silence_and_stable_mask, cqt_window, timestep, sr)
+
+    return all_groups
+        
+
+def group_by_dtw(all_groups, pitch, n_dtw, max_av_dtw, cqt_window, sr, timestep):
+    to_seqs = lambda y: round((y*cqt_window)/(sr*timestep))
+    ## Remove those that are identical
+    group_match_dict = {}
+    for i, ag1 in tqdm.tqdm(list(enumerate(all_groups))):
+        for j, ag2 in enumerate(all_groups):
+            if j >= i:
+                continue
+            sample1 = random.sample(ag1, min(n_dtw,len(ag1)))
+            sample2 = random.sample(ag2, min(n_dtw,len(ag2)))
+            this_dtw = []
+            for (x0, x1), (y0, y1) in itertools.product(sample1, sample2):
+                seq1 = pitch[to_seqs(x0): to_seqs(x1)]  
+                seq2 = pitch[to_seqs(y0): to_seqs(y1)]
+
+                seq_len = min([len(seq1), len(seq2)])
+
+                this_dtw.append(fastdtw.fastdtw(seq1, seq2, radius=round(seq_len*0.5))[0]/seq_len)
+
+            if np.mean(this_dtw) < n_dtw:
+                update_dict(group_match_dict, i, j)
+                update_dict(group_match_dict, j, i)
+
+    all_groups_ix = matches_dict_to_groups(group_match_dict)
+    all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
+    all_groups = [remove_group_duplicates(g, 0.01) for g in all_groups]
+    
+    return all_groups
 
 
+def same_group(group1, group2, perc_overlap, num=2):
+    for x0,x1 in group1:
+        for y0,y1 in group2:
+            overlap = do_patterns_overlap(x0, x1, y0, y1, perc_overlap=perc_overlap)
+            if overlap:
+                num -= 1
+            if num == 0:
+                return True
+    return False
 
 
+def group_overlapping(all_groups, dupl_perc_overlap):
+    ## Remove those that are identical
+    group_match_dict = {}
+    for i, ag1 in tqdm.tqdm(list(enumerate(all_groups))):
+        for j, ag2 in enumerate(all_groups):
+            if same_group(ag1, ag2, dupl_perc_overlap, 1):
+                update_dict(group_match_dict, i, j)
+                update_dict(group_match_dict, j, i)
+    
+    all_groups_ix = matches_dict_to_groups(group_match_dict)
+    all_groups_ix = [list(set(x)) for x in all_groups_ix]
+    all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
+    all_groups = [remove_group_duplicates(g, 0.01) for g in all_groups]
+
+    return all_groups
 
 
 

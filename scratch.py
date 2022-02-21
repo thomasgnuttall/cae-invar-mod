@@ -17,8 +17,9 @@ from exploration.img import (
     apply_bin_op, make_symmetric, edges_to_contours)
 from exploration.segments import (
     extract_segments_new, get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, 
-    remove_short, extend_segments, compare_segments, join_all_segments, learn_relationships_and_break, 
-    identify_matches)
+    remove_short, extend_segments, join_all_segments, learn_relationships_and_break_x, 
+    learn_relationships_and_break_y, identify_matches_x, identify_matches_y, matches_dict_to_groups,
+    check_groups_unique, update_dict, remove_group_duplicates, is_good_segment)
 from exploration.sequence import (
     apply_exclusions, contains_silence, min_gap, too_stable, 
     convert_seqs_to_timestep, get_stability_mask, add_center_to_mask,
@@ -37,7 +38,6 @@ from exploration.pitch import cents_to_pitch, pitch_seq_to_cents, pitch_to_cents
 out_dir = os.path.join("output", 'hpc')
 
 sim_path = 'output/full_dataset/Koti Janmani.multitrack-vocal.mp3.npy'
-
 
 ### Pitch Extraction
 
@@ -108,18 +108,24 @@ hough_high_angle = 45.01
 hough_low_angle = 44.99
 
 # Distance between consecutive diagonals to be joined in seconds
-min_diff_trav = 0.25
-min_diff_trav_hyp = (min_diff_trav**2 + min_diff_trav**2)**0.5 # transslate min_diff_trav to correpsonding diagonal distance
+min_diff_trav = 0.3
+min_diff_trav_hyp = (2*min_diff_trav**2)**0.5 # translate min_diff_trav to correpsonding diagonal distance
 min_diff_trav_seq = min_diff_trav_hyp*sr/cqt_window
 
-# Two segments must overlap in both x and y by <dupl_perc_overlap> 
-# to be considered the same, only the longest is returned
-dupl_perc_overlap = 0.75
+# segment A and B are the same if len(A) +/- match_tol == len(B)
+match_tol = 2
 
 # Grouping diagonals
 min_pattern_length_seconds = 1.5
 min_length_cqt = min_pattern_length_seconds*sr/cqt_window
 min_in_group = 2 # minimum number of patterns to be included in pattern group
+
+# Joining groups
+n_dtw = 5 # number of samples to take from each group to compare dtw values
+max_av_dtw = 20 # if average dtw distance (per sequence) between two groups is below this threshold, group them
+# Two segments must overlap in both x and y by <dupl_perc_overlap> 
+# to be considered the same, only the longest is returned
+dupl_perc_overlap = 0.85
 
 # Exclusions
 exclusion_functions = [contains_silence]
@@ -266,140 +272,51 @@ print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pa
 
 
 
+print('Identifying Segment Groups')
+all_groups = group_segments(all_segments_reduced, min_length_cqt, match_tol, silence_and_stable_mask, cqt_window, timestep, sr)
+
+print('Joining Groups of overlapping Sequences')
+all_groups = group_overlapping(all_groups, dupl_perc_overlap)
 
 
-
-
-
-
-
-from exploration.segments import *
-
-all_segs = all_segments_reduced
-
-# sort by shortest -> longest
-ordered_segments = sorted(all_segs, key=lambda y: y[1][0]-y[0][0])
-
-types_dict = {i:0 for i in range(1,10)}
-matches_dict = {}
-all_new_segs = []
-
-# connect segments based on symmetry
-for i, ((x0, y0), (x1, y1)) in enumerate(ordered_segments):
-    # x0==y0 and x1==y1
-    this = [j for j,x in enumerate(ordered_segments) if x0==x[0][1] and x1==x[1][1]]
-    for t in this:
-        update_dict(matches_dict, i, t)
-        update_dict(matches_dict, t, i)
-    # match segment with itself
-    update_dict(matches_dict, i, i)
-
-# to indicate whether a segment has been grouped
-used = [0]*len(ordered_segments)
-
-# For when we create new segments
-max_i = len(ordered_segments)-1
-
-
-import tqdm
-for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(ordered_segments))):
-    for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(ordered_segments):
-
-        if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
-            # horizontal pass
-            res = compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, all_new_segs, max_i, matches_dict)
-            all_new_segs, max_i, matches_dict = res
-
-        if (Qy0 <= Ry0 <= Qy1) or (Ry0 <= Qy0 <= Ry1):
-            # vertical pass (swap xs and ys)
-            res2 = compare_segments(i, j, Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, all_new_segs, max_i, matches_dict)
-            all_new_segs, max_i, matches_dict = res2
-
-old_and_new_segs = {i:((x0,y0), (x1,y1)) for i,((x0,y0), (x1,y1)) in enumerate(ordered_segments + all_new_segs) if is_good_segment(x0, y0, x1, y1, 0.6, silence_and_stable_mask, cqt_window, timestep, sr)}
-
-
-
-
-print('Grouping Segments')
-import tqdm
-
-contains_dict = {}
-is_subset_dict = {}
-shares_common = {}
-matches_dict = {}
-
-new_segments = all_segments_reduced.copy()
-
-print('...learning relationship between (sub)segments')
-for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(all_segments_reduced))):
-    for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(all_segments_reduced):
-        if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
-            # horizontal pass
-            res = learn_relationships_and_break(
-                i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, 
-                new_segments, contains_dict, is_subset_dict, shares_common)
-            new_segments, shares_common, is_subset_dict, contains_dict = res
-
-        if (Qy0 <= Ry0 <= Qy1) or (Ry0 <= Qy0 <= Ry1):
-            # vertical pass (swap xs and ys)
-            res = learn_relationships_and_break(
-                i, j, Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, 
-                new_segments, contains_dict, is_subset_dict, shares_common)
-            new_segments, shares_common, is_subset_dict, contains_dict = res
-
-print('...identifying matches')
-for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(new_segments))):
-    for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(new_segments):
-        if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
-            # horizontal pass
-            matches_dict = identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_cqt, matches_dict) 
-
-        if (Qy0 <= Ry0 <= Qy1) or (Ry0 <= Qy0 <= Ry1):
-            # vertical pass (swap xs and ys)
-            matches_dict = identify_matches(i, j, Qx0, Qy0, Qx1, Qy1, Ry0, Rx0, Ry1, Rx1, min_length_cqt, matches_dict)
-
-
-segment_ix_dict = {i:((x0,y0), (x1,y1)) for i,((x0,y0), (x1,y1)) in enumerate(new_segments)}
-
-print('...finalising grouping')
-all_groups = matches_dict_to_groups(matches_dict)
-check_groups_unique(all_groups)
-
-all_groups = [[segment_ix_dict[i] for i in ag if i in segment_ix_dict] for ag in all_groups]
-all_groups  = [[((x0,x1),(y0,y1)) for ((x0,y0),(x1,y1)) in ag] for ag in all_groups]
-all_groups  = [sorted([x for y in ag for x in y]) for ag in all_groups]
-
-all_groups = [remove_group_duplicates(g, 0.50) for g in all_groups]
-all_groups = [sorted(ag, key=lambda y:y[0]) for ag in all_groups]
-
-# sort groups
-all_groups = [sorted(arr, key=lambda y: y[0]) for arr in all_groups]
-all_groups = sorted(all_groups, key=lambda y: -len(y))
-all_groups = [x for x in all_groups if len(x) > 0]
-
-
-def same_group(group1, group2, perc_overlap=dupl_perc_overlap):
-    for x0,x1 in group1:
-        for y0,y1 in group2:
-            overlap = do_patterns_overlap(x0, x1, y0, y1, perc_overlap=perc_overlap)
-            if overlap:
-                return True
-
-## Remove those that are identical
-group_match_dict = {}
-for i, ag1 in enumerate(all_groups):
-    for j, ag2 in enumerate(all_groups):
-        if same_group(ag1, ag2):
-            update_dict(group_match_dict, i, j)
-            update_dict(group_match_dict, j, i)
-all_groups_ix = matches_dict_to_groups(group_match_dict)
-all_groups_ix = [list(set(x)) for x in all_groups_ix]
-all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
-all_groups = [remove_group_duplicates(g, 0.50) for g in all_groups]
-
+import random
+print('Grouping further using distance measures')
+all_groups = group_by_dtw(all_groups, pitch, n_dtw, max_av_dtw, cqt_window, sr, timestep)
 print(f'    {len(all_groups)} groups found...')
 
 
+#   pos_groups = [x for x in all_groups_ix if len(x) > 1]
+
+#   import random
+#   print('Grouping further using distance measures')
+#   to_seqs = lambda y: round((y*cqt_window)/(sr*timestep))
+#   ## Remove those that are identical
+
+#   all_dtw = []
+#   for group in tqdm.tqdm(pos_groups):
+#       for i1 in tqdm.tqdm(group):
+#           for i2 in group:
+#               if i2 >= i1:
+#                   continue
+#               ag1 = all_groups[i1]
+#               ag2 = all_groups[i2]
+#               sample1 = random.sample(ag1, min(10, len(ag1)))
+#               sample2 = random.sample(ag2, min(10, len(ag2)))
+#               this_dtw = []
+#               for (x0, x1), (y0, y1) in itertools.product(sample1, sample2):
+#                   seq1 = pitch[to_seqs(x0): to_seqs(x1)]  
+#                   seq2 = pitch[to_seqs(y0): to_seqs(y1)]
+#                   seq_len = min([len(seq1), len(seq2)])
+
+#                   this_dtw.append(fastdtw.fastdtw(seq1, seq2, radius=round(seq_len*0.5))[0]/seq_len)
+#               all_dtw.append(np.mean(this_dtw))
+
+
+#   plt.hist(all_dtw, 100)
+#   plt.title('DTW between known groups')
+#   plt.ylabel('DTW/sequence length')
+#   plt.savefig('images/dtw_intergroup.png')
+#   flush_matplotlib()
 
 
 
@@ -415,43 +332,12 @@ print(f'    {len(all_groups)} groups found...')
 
 
 
-print('Grouping Segments')
-all_groups = matches_dict_to_groups(matches_dict)
-check_groups_unique(all_groups)
-
-all_groups = [[old_and_new_segs[i] for i in ag if i in old_and_new_segs] for ag in all_groups]
-all_groups  = [[((x0,x1),(y0,y1)) for ((x0,y0),(x1,y1)) in ag] for ag in all_groups]
-all_groups  = [sorted([x for y in ag for x in y]) for ag in all_groups]
-
-all_groups = [remove_group_duplicates(g, 0.50) for g in all_groups]
-all_groups = [sorted(ag, key=lambda y:y[0]) for ag in all_groups]
-
-# sort groups
-all_groups = [sorted(arr, key=lambda y: y[0]) for arr in all_groups]
-all_groups = sorted(all_groups, key=lambda y: -len(y))
-all_groups = [x for x in all_groups if len(x) > 0]
 
 
-def same_group(group1, group2, perc_overlap=dupl_perc_overlap):
-    for x0,x1 in group1:
-        for y0,y1 in group2:
-            overlap = do_patterns_overlap(x0, x1, y0, y1, perc_overlap=perc_overlap)
-            if overlap:
-                return True
 
-## Remove those that are identical
-group_match_dict = {}
-for i, ag1 in enumerate(all_groups):
-    for j, ag2 in enumerate(all_groups):
-        if same_group(ag1, ag2):
-            update_dict(group_match_dict, i, j)
-            update_dict(group_match_dict, j, i)
-all_groups_ix = matches_dict_to_groups(group_match_dict)
-all_groups_ix = [list(set(x)) for x in all_groups_ix]
-all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
-all_groups = [remove_group_duplicates(g, 0.50) for g in all_groups]
 
-print(f'    {len(all_groups)} groups found...')
+
+
 
 print('Convert sequences to pitch track timesteps')
 starts_seq, lengths_seq = convert_seqs_to_timestep(all_groups, cqt_window, sr, timestep)
@@ -463,10 +349,9 @@ starts_seq_exc,  lengths_seq_exc = remove_below_length(starts_seq, lengths_seq, 
 starts_seq_exc = [p for p in starts_seq_exc if len(p)>min_in_group]
 lengths_seq_exc = [p for p in lengths_seq_exc if len(p)>min_in_group]
 
-
 print('Extend all segments to stable or silence')
 silence_and_stable_mask_2 = np.array([1 if any([i==2,j==2]) else 0 for i,j in zip(silence_mask, stable_mask)])
-def extend_to_mask(starts_seq_exc, lengths_seq_exc, mask, toler=0.5):
+def extend_to_mask(starts_seq_exc, lengths_seq_exc, mask, toler=0.25):
     mask_i = list(range(len(mask)))
     starts_seq_ext = []
     lengths_seq_ext = []
@@ -497,7 +382,6 @@ def extend_to_mask(starts_seq_exc, lengths_seq_exc, mask, toler=0.5):
             if 1 in s2_mask:
                 ix = s2_mask.index(1)
                 s2 = s2_mask_i[ix]
-
 
             l = s2 - s1
 
@@ -538,6 +422,21 @@ print(f'Coverage: {round(coverage,2)}')
 annotations_tagged = evaluate_quick(annotations_filt, starts_sec_ext, lengths_sec_ext, eval_tol, partial_perc)
 
 
+print('Plotting Patterns')
+X_canvas = X.copy()
+X_canvas[:] = 0
+
+samp1 = 5000
+samp2 = 9000
+
+# Orig matrix
+X_orig = X.copy()[samp1:samp2,samp1:samp2]
+
+# Patterns from full pipeline
+X_patterns = add_patterns_to_plot(X_canvas, starts_sec_ext, lengths_sec_ext, sr, cqt_window)
+X_joined = join_plots(X_orig, X_patterns[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/11_self_sim_patterns3.png', X_joined.astype(np.uint8))
+flush_matplotlib()
 
 
 
@@ -559,7 +458,7 @@ flush_matplotlib()
 # partial_percs = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
 # for p in partial_percs:
 #     metrics, annotations_tag = evaluate_all_tiers(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, partial_perc=p)
-#     all_recalls.append(metrics['pasrtial_match_recall_all'])
+#     all_recalls.append(metrics['partial_match_recall_all'])
 
 
 # plt.figure(figsize=(10,5))
@@ -633,6 +532,7 @@ X_segments_reduced = add_segments_to_plot(X_canvas, all_segments_reduced)
 # Found segments broken from image processing
 X_segments_extended = add_segments_to_plot(X_canvas, all_segments_extended)
 X_segments_joined = add_segments_to_plot(X_canvas, all_segments_joined)
+X_segments_new = add_segments_to_plot(X_canvas, new_segments[len(all_segments_joined):])
 
 # Patterns from full pipeline
 X_patterns = add_patterns_to_plot(X_canvas, starts_sec_ext, lengths_sec_ext, sr, cqt_window)
@@ -660,6 +560,9 @@ matplotlib.image.imsave('images/6_self_sim_joined.png', X_joined.astype(np.uint8
 X_joined = join_plots(X_orig, X_segments_reduced[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/8_self_sim_segments_reduced.png', X_joined.astype(np.uint8))
 
+X_joined = join_plots(X_orig, X_segments_new[samp1:samp2,samp1:samp2], False)
+matplotlib.image.imsave('images/8_self_sim_segments_new.png', X_joined.astype(np.uint8))
+
 X_joined = join_plots(X_orig, X_annotate[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/9_self_sim_annotate.png', X_joined.astype(np.uint8))
 
@@ -668,7 +571,7 @@ matplotlib.image.imsave('images/10_annotations_patterns.png', X_joined.astype(np
 
 X_joined = join_plots(X_orig, X_patterns[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/11_self_sim_patterns.png', X_joined.astype(np.uint8))
-
+flush_matplotlib()
 
 
 
