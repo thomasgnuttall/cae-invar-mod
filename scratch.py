@@ -17,19 +17,16 @@ from exploration.img import (
     apply_bin_op, make_symmetric, edges_to_contours)
 from exploration.segments import (
     extract_segments_new, get_all_segments, break_all_segments, do_patterns_overlap, reduce_duplicates, 
-    remove_short, extend_segments, join_all_segments, learn_relationships_and_break_x, 
-    learn_relationships_and_break_y, identify_matches_x, identify_matches_y, matches_dict_to_groups,
-    check_groups_unique, update_dict, remove_group_duplicates, is_good_segment)
+    remove_short, extend_segments, join_all_segments, extend_groups_to_mask, group_segments, group_overlapping,
+    group_by_distance)
 from exploration.sequence import (
     apply_exclusions, contains_silence, min_gap, too_stable, 
     convert_seqs_to_timestep, get_stability_mask, add_center_to_mask,
-    remove_below_length)
+    remove_below_length, extend_to_mask)
 from exploration.evaluation import evaluate_quick, load_annotations_new, evaluate_all_tiers, evaluation_report, get_coverage
 from exploration.visualisation import plot_all_sequences, plot_pitch, flush_matplotlib
 from exploration.io import load_sim_matrix, write_all_sequence_audio, load_yaml
 from exploration.pitch import cents_to_pitch, pitch_seq_to_cents, pitch_to_cents
-
-
 
 ################
 ## Parameters ##
@@ -112,25 +109,26 @@ min_diff_trav = 0.3
 min_diff_trav_hyp = (2*min_diff_trav**2)**0.5 # translate min_diff_trav to correpsonding diagonal distance
 min_diff_trav_seq = min_diff_trav_hyp*sr/cqt_window
 
-# segment A and B are the same if len(A) +/- match_tol == len(B)
-match_tol = 2
-
 # Grouping diagonals
-min_pattern_length_seconds = 1.5
+min_pattern_length_seconds = 2
 min_length_cqt = min_pattern_length_seconds*sr/cqt_window
 min_in_group = 2 # minimum number of patterns to be included in pattern group
 
 # Joining groups
+match_tol = 1
 n_dtw = 5 # number of samples to take from each group to compare dtw values
-max_av_dtw = 20 # if average dtw distance (per sequence) between two groups is below this threshold, group them
+thresh_dtw = 12 # if average dtw distance (per sequence) between two groups is below this threshold, group them
+thresh_cos = 0.21  # if average cos distance (per sequence) between two groups is below this threshold, group them
 # Two segments must overlap in both x and y by <dupl_perc_overlap> 
 # to be considered the same, only the longest is returned
 dupl_perc_overlap = 0.85
 
+extend_tol = 0.5 # what percentage of pattern legnth to extend pattern to if there exists a silnce or stability in this region
+
 # Exclusions
 exclusion_functions = [contains_silence]
 
-# Evaluation
+# evaluation
 annotations_path = 'annotations/koti_janmani.txt'
 eval_tol = 0.5 # how much leniancy on each side of an annotated pattern before considering it a match (seconds)
 partial_perc = 0.75 # how much overlap does an annotated and identified pattern needed to be considered a partial match
@@ -187,6 +185,7 @@ ext_filename = os.path.join(out_dir, '9_Koti Janmani_cont_ext.png') if save_imgs
 
 if save_imgs:
     skimage.io.imsave(sim_filename, X_samp)
+
 
 ##############
 ## Pipeline ##
@@ -247,6 +246,12 @@ def save_object(obj, filename):
 save_object(all_segments, 'output/all_segments.pkl')
 
 
+
+
+
+
+
+
 import pickle
 file = open('output/all_segments.pkl','rb')
 all_segments = pickle.load(file)
@@ -272,75 +277,61 @@ print(f'    {len(all_segments_reduced)} segments above minimum length of {min_pa
 
 
 
+
 print('Identifying Segment Groups')
 all_groups = group_segments(all_segments_reduced, min_length_cqt, match_tol, silence_and_stable_mask, cqt_window, timestep, sr)
+print(f'    {len(all_groups)} segment groups found...')
+
+print('Extending segments to silence')
+silence_and_stable_mask_2 = np.array([1 if any([i==2,j==2]) else 0 for i,j in zip(silence_mask, stable_mask)])
+all_groups_ext = extend_groups_to_mask(all_groups, silence_and_stable_mask_2, toler=0.5)
 
 print('Joining Groups of overlapping Sequences')
-all_groups = group_overlapping(all_groups, dupl_perc_overlap)
+all_groups_over = group_overlapping(all_groups_ext, dupl_perc_overlap)
+print(f'    {len(all_groups_over)} groups after join...')
 
 
-import random
+
+
+
+def get_dtw(thresh_dtw, thresh_cos):
+    group_match_dict = {}
+    for i, ag1 in tqdm.tqdm(list(enumerate(all_groups_over))):
+        for j, ag2 in enumerate(all_groups_over):
+            if j >= i:
+                continue
+            val_dtw = all_dtw[i][j]
+            val_cos = all_cos[i][j]
+
+            if val_dtw < thresh_dtw and val_cos < thresh_cos:
+                update_dict(group_match_dict, i, j)
+                update_dict(group_match_dict, j, i)
+
+    for i in range(len(all_groups_over)):
+        if i not in group_match_dict:
+            group_match_dict[i] = []
+
+    all_groups_ix = matches_dict_to_groups(group_match_dict)
+    all_groups = [[x for i in group for x in all_groups_over[i]] for group in all_groups_ix]
+    all_groups = [remove_group_duplicates(g, 0.75, True) for g in all_groups]
+
+    return all_groups
+
+thresh_dtw = 12
+thresh_cos = 0.21
+
+
 print('Grouping further using distance measures')
-all_groups = group_by_dtw(all_groups, pitch, n_dtw, max_av_dtw, cqt_window, sr, timestep)
-print(f'    {len(all_groups)} groups found...')
-
-
-#   pos_groups = [x for x in all_groups_ix if len(x) > 1]
-
-#   import random
-#   print('Grouping further using distance measures')
-#   to_seqs = lambda y: round((y*cqt_window)/(sr*timestep))
-#   ## Remove those that are identical
-
-#   all_dtw = []
-#   for group in tqdm.tqdm(pos_groups):
-#       for i1 in tqdm.tqdm(group):
-#           for i2 in group:
-#               if i2 >= i1:
-#                   continue
-#               ag1 = all_groups[i1]
-#               ag2 = all_groups[i2]
-#               sample1 = random.sample(ag1, min(10, len(ag1)))
-#               sample2 = random.sample(ag2, min(10, len(ag2)))
-#               this_dtw = []
-#               for (x0, x1), (y0, y1) in itertools.product(sample1, sample2):
-#                   seq1 = pitch[to_seqs(x0): to_seqs(x1)]  
-#                   seq2 = pitch[to_seqs(y0): to_seqs(y1)]
-#                   seq_len = min([len(seq1), len(seq2)])
-
-#                   this_dtw.append(fastdtw.fastdtw(seq1, seq2, radius=round(seq_len*0.5))[0]/seq_len)
-#               all_dtw.append(np.mean(this_dtw))
-
-
-#   plt.hist(all_dtw, 100)
-#   plt.title('DTW between known groups')
-#   plt.ylabel('DTW/sequence length')
-#   plt.savefig('images/dtw_intergroup.png')
-#   flush_matplotlib()
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+#all_groups_dtw = group_by_dtw(all_groups_over, pitch, n_dtw, max_av_dtw, cqt_window, sr, timestep)
+all_groups_dtw = get_dtw(thresh_dtw, thresh_cos)
+print(f'    {len(all_groups_dtw)} groups after join...')
 
 
 
 
 
 print('Convert sequences to pitch track timesteps')
-starts_seq, lengths_seq = convert_seqs_to_timestep(all_groups, cqt_window, sr, timestep)
+starts_seq, lengths_seq = convert_seqs_to_timestep(all_groups_dtw, cqt_window, sr, timestep)
 
 print('Applying exclusion functions')
 #starts_seq_exc, lengths_seq_exc = apply_exclusions(raw_pitch, starts_seq, lengths_seq, exclusion_functions, min_in_group)
@@ -350,50 +341,7 @@ starts_seq_exc = [p for p in starts_seq_exc if len(p)>min_in_group]
 lengths_seq_exc = [p for p in lengths_seq_exc if len(p)>min_in_group]
 
 print('Extend all segments to stable or silence')
-silence_and_stable_mask_2 = np.array([1 if any([i==2,j==2]) else 0 for i,j in zip(silence_mask, stable_mask)])
-def extend_to_mask(starts_seq_exc, lengths_seq_exc, mask, toler=0.25):
-    mask_i = list(range(len(mask)))
-    starts_seq_ext = []
-    lengths_seq_ext = []
-    for i in range(len(starts_seq_exc)):
-        s_group = starts_seq_exc[i]
-        l_group = lengths_seq_exc[i]
-        this_group_s = []
-        this_group_l = []
-        for j in range(len(s_group)):
-            l = l_group[j]
-            s1 = s_group[j]
-            s2 = s1 + l
-            
-            s1_ = s1 - round(l*toler)
-            s2_ = s2 + round(l*toler)
-
-            midpoint = s1 + round(l/2)
-
-            s1_mask   = list(mask[s1_:s1])
-            s2_mask   = list(mask[s2:s2_])
-            s1_mask_i = list(mask_i[s1_:s1])
-            s2_mask_i = list(mask_i[s2:s2_])
-
-            if 1 in s1_mask:
-                ix = len(s1_mask) - s1_mask[::-1].index(1) - 1
-                s1 = s1_mask_i[ix]
-
-            if 1 in s2_mask:
-                ix = s2_mask.index(1)
-                s2 = s2_mask_i[ix]
-
-            l = s2 - s1
-
-            this_group_s.append(s1)
-            this_group_l.append(l)
-        starts_seq_ext.append(this_group_s)
-        lengths_seq_ext.append(this_group_l)
-
-    return starts_seq_ext, lengths_seq_ext
-
-
-starts_seq_ext, lengths_seq_ext = extend_to_mask(starts_seq_exc, lengths_seq_exc, silence_and_stable_mask_2)
+starts_seq_ext, lengths_seq_ext = starts_seq_exc, lengths_seq_exc
 
 starts_sec_ext = [[x*timestep for x in p] for p in starts_seq_ext]
 lengths_sec_ext = [[x*timestep for x in l] for l in lengths_seq_ext]
@@ -419,7 +367,35 @@ print(f'Number of Patterns: {n_patterns}')
 print(f'Number of Groups: {len(starts_sec_ext)}')
 print(f'Coverage: {round(coverage,2)}')
 #evaluation_report(metrics)
-annotations_tagged = evaluate_quick(annotations_filt, starts_sec_ext, lengths_sec_ext, eval_tol, partial_perc)
+annotations_tagged, recall_all, precision_all, recall_motif, recall_phrase = evaluate_quick(annotations_filt, starts_sec_ext, lengths_sec_ext, eval_tol, partial_perc)
+
+
+
+
+
+
+
+############
+## Output ##
+############
+sorted_starts = []
+sorted_lengths = []
+for i in range(len(starts_seq_ext)):
+    this = sorted(zip(starts_seq_ext[i], lengths_seq_ext[i]), key=lambda y: y[0])
+    sorted_starts.append([x for x,y in this])
+    sorted_lengths.append([y for x,y in this])
+
+sorted_lengths = [y for x,y in sorted(zip(sorted_starts, sorted_lengths), key=lambda y: y[0][0])]
+sorted_starts = [x for x,y in sorted(zip(sorted_starts, sorted_lengths), key=lambda y: y[0][0])]
+
+
+
+print('Writing all sequences')
+plot_all_sequences(raw_pitch, time, lengths_seq_ext[:top_n], starts_seq_ext[:top_n], f'output/new_group_dtw={thresh_dtw}__cos={thresh_cos}', clear_dir=True, plot_kwargs=plot_kwargs)
+write_all_sequence_audio(audio_path, starts_seq_ext[:top_n], lengths_seq_ext[:top_n], timestep, f'output/new_group_dtw={thresh_dtw}__cos={thresh_cos}')
+annotations_tagged.to_csv(f'output/new_group_dtw={thresh_dtw}__cos={thresh_cos}/annotations.csv', index=False)
+flush_matplotlib()
+
 
 
 print('Plotting Patterns')
@@ -437,22 +413,6 @@ X_patterns = add_patterns_to_plot(X_canvas, starts_sec_ext, lengths_sec_ext, sr,
 X_joined = join_plots(X_orig, X_patterns[samp1:samp2,samp1:samp2], False)
 matplotlib.image.imsave('images/11_self_sim_patterns3.png', X_joined.astype(np.uint8))
 flush_matplotlib()
-
-
-
-
-
-
-############
-## Output ##
-############
-print('Writing all sequences')
-plot_all_sequences(raw_pitch, time, lengths_seq_ext[:top_n], starts_seq_ext[:top_n], 'output/new_group', clear_dir=True, plot_kwargs=plot_kwargs)
-write_all_sequence_audio(audio_path, starts_seq_ext[:top_n], lengths_seq_ext[:top_n], timestep, 'output/new_group')
-annotations_tagged.to_csv('output/new_group/annotations.csv', index=False)
-flush_matplotlib()
-
-
 
 # all_recalls =[]
 # partial_percs = [0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1]
