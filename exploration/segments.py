@@ -1,11 +1,19 @@
+import itertools
+from itertools import groupby
+import random
+
+random.seed(42)
+
+import fastdtw
 import numpy as np
 from numpy import ones,vstack
 from numpy.linalg import lstsq
 
 from scipy.ndimage import label, generate_binary_structure
+from scipy.spatial.distance import cosine
 import skimage.io
 from sklearn.cluster import DBSCAN
-from itertools import groupby
+
 from operator import itemgetter
 
 import tqdm
@@ -570,30 +578,7 @@ def get_length(x1,y1,x2,y2):
     return ((x2-x1)**2 + (y2-y1)**2)**0.5
 
 
-# def remove_group_duplicates(group, eps):
-#     start_length = sorted([(x1, x2-x1, i) for i, (x1,x2) in enumerate(group) if x2-x1>0])
-
-#     if len(start_length) == 0:
-#         return []
-
-#     clustering = DBSCAN(eps=eps, min_samples=1)\
-#                 .fit(np.array([d for d,l,i in start_length])\
-#                 .reshape(-1, 1))
-#     
-#     with_cluster = list(zip(clustering.labels_, start_length))
-
-#     top_indices = []
-#     for g, data in groupby(with_cluster, key=itemgetter(0)):
-#         data = list(data)
-#         top_i = sorted(data, key=lambda y: -y[1][1])[0][1][2]
-#         top_indices.append(top_i)
-
-#     group_reduced = [x for i,x in enumerate(group) if i in top_indices]
-
-#     return [x for x in group_reduced if x]
-
-
-def remove_group_duplicates(group, perc_overlap):
+def remove_group_duplicates(group, perc_overlap, both=False):
     
     group_sorted = sorted(group, key= lambda y: (y[1]-y[0]), reverse=True)
 
@@ -603,13 +588,23 @@ def remove_group_duplicates(group, perc_overlap):
         if skip_array[i]:
             continue
         for j,(y0,y1) in enumerate(group_sorted):
-            if skip_array[j] or i==j:
+            if skip_array[j] or i>=j:
                 continue
             overlap = do_patterns_overlap(x0, x1, y0, y1, perc_overlap=perc_overlap)
+            
             if overlap:
+                if both:
+                    new_group.append((min([x0,y0]),max([x1,y1])))
                 # skip j since it is shorter
                 skip_array[j] = 1
-        new_group.append((x0,x1))
+                continue
+        
+        if not both:
+            new_group.append((x0,x1))
+        else:
+            if (not overlap):
+                new_group.append((x0,x1))
+
         skip_array[i] = 1
     return new_group
 
@@ -640,19 +635,6 @@ def is_good_segment(x0, y0, x1, y1, thresh, silence_and_stable_mask, cqt_window,
     else:
         return False
 
-
-#def matches_dict_to_groups(matches_dict):
-#    all_groups = []
-#    for i, matches in matches_dict.items():
-#        this_group = [i] + matches
-#        for j,ag in enumerate(all_groups):
-#            if set(this_group).intersection(set(ag)):
-#                # group exists, append
-#                all_groups[j] = list(set(all_groups[j] + this_group))
-#                break
-#            # group doesnt exist yet
-#            all_groups.append(this_group)
-#    return all_groups
 
 def matches_dict_to_groups(matches_dict):
     l = [list(set([k]+v)) for k,v in matches_dict.items()]
@@ -698,6 +680,14 @@ def update_dict(d, k, v):
         d[k] = [v]
 
 
+def ensure_indices_in_dict(d, ni):
+    cd = d.copy()
+    mi = max(d.keys())
+    nd = {i:[] for i in range(mi+1,ni)}
+    cd.update(nd)
+    return cd
+
+
 def get_dist(point1, point2):
     x1, y1 = point1
     x2, y2 = point2
@@ -723,7 +713,7 @@ def join_segments(segA, segB):
 
 
 def join_all_segments(all_segments, min_diff_trav_seq):
-    group_join_dict = {}
+    group_join_dict = {k:[] for k in range(len(all_segments))}
     for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(all_segments))):
         for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(all_segments):
             if i == j:
@@ -1299,13 +1289,12 @@ def learn_relationships_and_break_y(
 
 
 def learn_relationships(all_segments, min_length_cqt):
-    contains_dict = {}
-    is_subset_dict = {}
-    shares_common = {}
+    contains_dict = {k:[] for k in range(len(all_segments))}
+    is_subset_dict = {k:[] for k in range(len(all_segments))}
+    shares_common = {k:[] for k in range(len(all_segments))}
 
     new_segments = []
 
-    
     for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(all_segments))):
         for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(all_segments): 
             if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
@@ -1406,7 +1395,7 @@ def identify_matches_y(i, j, Qx0, Qy0, Qx1, Qy1, Rx0, Ry0, Rx1, Ry1, min_length_
 
 
 def get_matches_dict(new_segments, min_length_cqt, match_tol):
-    matches_dict = {}
+    matches_dict = {k:[] for k in range(len(new_segments))}
     for i, ((Qx0, Qy0), (Qx1, Qy1)) in tqdm.tqdm(list(enumerate(new_segments))):
         for j, [(Rx0, Ry0), (Rx1, Ry1)] in enumerate(new_segments):
             if (Qx0 <= Rx0 <= Qx1) or (Rx0 <= Qx0 <= Rx1):
@@ -1424,7 +1413,7 @@ def get_matches_dict(new_segments, min_length_cqt, match_tol):
     return matches_dict
 
 
-def get_segment_grouping(new_segments, matches_dict, silence_and_stable_mask, cqt_window, timestep, sr)
+def get_segment_grouping(new_segments, matches_dict, silence_and_stable_mask, cqt_window, timestep, sr):
 
     segment_ix_dict = {i:((x0,y0), (x1,y1)) for i,((x0,y0), (x1,y1)) in enumerate(new_segments) \
                         if is_good_segment(x0, y0, x1, y1, 0.6, silence_and_stable_mask, cqt_window, timestep, sr)}
@@ -1449,9 +1438,9 @@ def get_segment_grouping(new_segments, matches_dict, silence_and_stable_mask, cq
     return all_groups
 
 
-def group_segments(all_segments_reduced, min_length_cqt, match_tol, silence_and_stable_mask, cqt_window, timestep, sr):
+def group_segments(all_segments, min_length_cqt, match_tol, silence_and_stable_mask, cqt_window, timestep, sr):
     print('...learning relationship between (sub)segments\n')
-    new_segments, contains_dict, is_subset_dict, shares_common = learn_relationships(all_segments_reduced, min_length_cqt)
+    new_segments, contains_dict, is_subset_dict, shares_common = learn_relationships(all_segments, min_length_cqt)
 
     print('...identifying matches\n')
     matches_dict = get_matches_dict(new_segments, min_length_cqt, match_tol)
@@ -1460,37 +1449,46 @@ def group_segments(all_segments_reduced, min_length_cqt, match_tol, silence_and_
     all_groups = get_segment_grouping(new_segments, matches_dict, silence_and_stable_mask, cqt_window, timestep, sr)
 
     return all_groups
-        
 
-def group_by_dtw(all_groups, pitch, n_dtw, max_av_dtw, cqt_window, sr, timestep):
-    to_seqs = lambda y: round((y*cqt_window)/(sr*timestep))
-    ## Remove those that are identical
-    group_match_dict = {}
-    for i, ag1 in tqdm.tqdm(list(enumerate(all_groups))):
-        for j, ag2 in enumerate(all_groups):
-            if j >= i:
-                continue
-            sample1 = random.sample(ag1, min(n_dtw,len(ag1)))
-            sample2 = random.sample(ag2, min(n_dtw,len(ag2)))
-            this_dtw = []
-            for (x0, x1), (y0, y1) in itertools.product(sample1, sample2):
-                seq1 = pitch[to_seqs(x0): to_seqs(x1)]  
-                seq2 = pitch[to_seqs(y0): to_seqs(y1)]
 
-                seq_len = min([len(seq1), len(seq2)])
+def extend_groups_to_mask(all_groups, mask, toler=0.25):
+    mask_i = list(range(len(mask)))
+    new_groups = []
+    for group in all_groups:
+        this_group = []
+        for x1, x2 in group:
+            s1 = round((x1*cqt_window)/(sr*timestep))
+            s2 = round((x2*cqt_window)/(sr*timestep))
 
-                this_dtw.append(fastdtw.fastdtw(seq1, seq2, radius=round(seq_len*0.5))[0]/seq_len)
+            l = s2-s1
+            
+            s1_ = s1 - round(l*toler)
+            s2_ = s2 + round(l*toler)
 
-            if np.mean(this_dtw) < n_dtw:
-                update_dict(group_match_dict, i, j)
-                update_dict(group_match_dict, j, i)
+            midpoint = s1 + round(l/2)
 
-    all_groups_ix = matches_dict_to_groups(group_match_dict)
-    all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
-    all_groups = [remove_group_duplicates(g, 0.01) for g in all_groups]
+            s1_mask   = list(mask[s1_:s1])
+            s2_mask   = list(mask[s2:s2_])
+            s1_mask_i = list(mask_i[s1_:s1])
+            s2_mask_i = list(mask_i[s2:s2_])
+
+            if 1 in s1_mask:
+                ix = len(s1_mask) - s1_mask[::-1].index(1) - 1
+                s1 = s1_mask_i[ix]
+
+            if 1 in s2_mask:
+                ix = s2_mask.index(1)
+                s2 = s2_mask_i[ix]
+
+            x1 = round((s1*sr*timestep)/cqt_window)
+            x2 = round((s2*sr*timestep)/cqt_window)
+
+            this_group.append((x1,x2))
+
+        new_groups.append(this_group)
+
+    return new_groups
     
-    return all_groups
-
 
 def same_group(group1, group2, perc_overlap, num=2):
     for x0,x1 in group1:
@@ -1505,13 +1503,20 @@ def same_group(group1, group2, perc_overlap, num=2):
 
 def group_overlapping(all_groups, dupl_perc_overlap):
     ## Remove those that are identical
-    group_match_dict = {}
+    group_match_dict = {k:[] for k in range(len(all_groups))}
     for i, ag1 in tqdm.tqdm(list(enumerate(all_groups))):
         for j, ag2 in enumerate(all_groups):
+            if i >= j:
+                continue
+            
+            # If already paired, do not compute distance
+            if i in group_match_dict[j] or j in group_match_dict[i]:
+                continue
+
             if same_group(ag1, ag2, dupl_perc_overlap, 1):
                 update_dict(group_match_dict, i, j)
                 update_dict(group_match_dict, j, i)
-    
+
     all_groups_ix = matches_dict_to_groups(group_match_dict)
     all_groups_ix = [list(set(x)) for x in all_groups_ix]
     all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
@@ -1520,10 +1525,38 @@ def group_overlapping(all_groups, dupl_perc_overlap):
     return all_groups
 
 
+def group_by_distance(all_groups, pitch, n_dtw, thresh_dtw, thresh_cos, cqt_window, sr, timestep):
+    to_seqs = lambda y: round((y*cqt_window)/(sr*timestep))
+    ## Remove those that are identical
+    group_match_dict = {k:[] for k in range(len(all_groups))}
 
+    for i, ag1 in tqdm.tqdm(list(enumerate(all_groups))):
+        for j, ag2 in enumerate(all_groups):
+            if j >= i:
+                continue
 
+            # If already paired, do not compute distance
+            if i in group_match_dict[j] or j in group_match_dict[i]:
+                continue
 
+            sample1 = random.sample(ag1, min(n_dtw,len(ag1)))
+            sample2 = random.sample(ag2, min(n_dtw,len(ag2)))
 
+            for (x0, x1), (y0, y1) in itertools.product(sample1, sample2):
+                seq1 = np.trim_zeros(pitch[to_seqs(x0): to_seqs(x1)])
+                seq2 = np.trim_zeros(pitch[to_seqs(y0): to_seqs(y1)])
 
+                seq_len = min([len(seq1), len(seq2)])
+                dtw_val, path = fastdtw.fastdtw(seq1, seq2, radius=round(seq_len*0.5))
+                cos_val = cosine(seq1, seq2)
 
+                if (dtw_val/len(path) < thresh_dtw) and (cos_val < thresh_cos):
+                    update_dict(group_match_dict, i, j)
+                    update_dict(group_match_dict, j, i)
+                    break
 
+    all_groups_ix = matches_dict_to_groups(group_match_dict)
+    all_groups = [[x for i in group for x in all_groups[i]] for group in all_groups_ix]
+    all_groups = [remove_group_duplicates(g, 0.75, True) for g in all_groups]
+    
+    return all_groups
