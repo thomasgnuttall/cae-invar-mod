@@ -16,7 +16,7 @@ import numpy as np
 import os
 import torch
 from scipy.signal import convolve2d
-from scipy.spatial.distance import pdist, squareform
+from scipy.spatial.distance import cdist, squareform
 from sklearn.linear_model import LogisticRegression
 from sklearn.neighbors import KNeighborsClassifier
 
@@ -114,9 +114,10 @@ def classify(mags, mags_test, classes, classes_test, type='knn'):
         return error
 
 
-def create_ss_matrix(ampls, mode='cosine'):
-    matrix = squareform(pdist(np.vstack(to_numpy(ampls)),
-                              metric=mode))
+def create_ss_matrix(ampls1, ampls1, mode='cosine'):
+    ampls1_v = np.vstack(to_numpy(ampls1))
+    ampls2_v = np.vstack(to_numpy(ampls2))
+    matrix = squareform(cdist(ampls1_v, ampls2_v,metric=mode))
     return matrix
 
 
@@ -142,22 +143,7 @@ def create_matrices(dir_results, files, step_size=1, mode='cosine'):
         print(f"Creating self-similarity matrix from features of {file}..")
         data = get_input_repr(file)
         ampls, phases = to_amp_phase(data, step_size=step_size)
-
-        matrix = create_ss_matrix(ampls, mode=mode)
-        matrix = np.pad(matrix, ((0, 9), (0, 9)), mode='constant',
-                        constant_values=matrix.max())
-        matrix = 1 / (matrix + 1e-6)
-
-        for k in range(-8, 9):
-            eye = 1 - np.eye(*matrix.shape, k=k)
-            matrix = matrix * eye
-
-        flength = 10
-        ey = np.eye(flength) + np.eye(flength, k=1) + np.eye(flength, k=-1)
-        matrix = convolve2d(matrix, ey, mode="same")
-        matrix -= matrix.min()
-        matrix /= (matrix.max() + 1e-8)
-
+        matrix = create_matrix(ampls, ampls, mode)
         fn_base = os.path.basename(file)
         out_npy = os.path.join(dir_results, f"{fn_base}.npy")
         out_plot = os.path.join(out_dir, f"{fn_base}.png")
@@ -172,6 +158,26 @@ def create_matrices(dir_results, files, step_size=1, mode='cosine'):
     with open(os.path.join(out_dir, "ss_matrices_filelist.txt"), "w+") as f:
         for file in out_files:
             f.write(file + "\n")
+
+
+def create_matrix(ampls1, ampls2, mode):
+    matrix = create_ss_matrix(ampls1, ampls2, mode=mode)
+
+    matrix = np.pad(matrix, ((0, 9), (0, 9)), mode='constant',
+                    constant_values=matrix.max())
+    matrix = 1 / (matrix + 1e-6)
+
+    for k in range(-8, 9):
+        eye = 1 - np.eye(*matrix.shape, k=k)
+        matrix = matrix * eye
+
+    flength = 10
+    ey = np.eye(flength) + np.eye(flength, k=1) + np.eye(flength, k=-1)
+    matrix = convolve2d(matrix, ey, mode="same")
+    matrix -= matrix.min()
+    matrix /= (matrix.max() + 1e-8)
+
+    return matrix
 
 
 def get_input_repr(file):
