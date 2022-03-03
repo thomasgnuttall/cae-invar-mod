@@ -171,3 +171,46 @@ def remove_below_length(starts_seq, lengths_seq, timestep, min_length):
             lengths_seq_long.append(this_group_l)
 
     return starts_seq_long, lengths_seq_long
+
+
+def extend_to_mask(starts_seq_exc, lengths_seq_exc, mask, toler=0.25):
+    mask_i = list(range(len(mask)))
+    starts_seq_ext = []
+    lengths_seq_ext = []
+    for i in range(len(starts_seq_exc)):
+        s_group = starts_seq_exc[i]
+        l_group = lengths_seq_exc[i]
+        this_group_s = []
+        this_group_l = []
+        for j in range(len(s_group)):
+            l = l_group[j]
+            s1 = s_group[j]
+            s2 = s1 + l
+            
+            s1_ = s1 - round(l*toler)
+            s2_ = s2 + round(l*toler)
+
+            midpoint = s1 + round(l/2)
+
+            s1_mask   = list(mask[s1_:s1])
+            s2_mask   = list(mask[s2:s2_])
+            s1_mask_i = list(mask_i[s1_:s1])
+            s2_mask_i = list(mask_i[s2:s2_])
+
+            if 1 in s1_mask:
+                ix = len(s1_mask) - s1_mask[::-1].index(1) - 1
+                s1 = s1_mask_i[ix]
+
+            if 1 in s2_mask:
+                ix = s2_mask.index(1)
+                s2 = s2_mask_i[ix]
+
+            l = s2 - s1
+
+            this_group_s.append(s1)
+            this_group_l.append(l)
+        starts_seq_ext.append(this_group_s)
+        lengths_seq_ext.append(this_group_l)
+
+    return starts_seq_ext, lengths_seq_ext
+
