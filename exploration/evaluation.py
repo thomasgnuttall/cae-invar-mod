@@ -52,10 +52,6 @@ def is_match_v2(sp, lp, sa, ea, tol=0.1, partial_perc=0.3):
     #  are within tolerance of annotation
     if (sa - tol <= sp <= sa + tol) and (ea - tol <= ep <= ea + tol):
         return 'full match (exact)'
-    
-    # If identifed pattern contains completely the annotation
-    if (sa + tol >= sp) and (ea <= ep + tol):
-        return 'full match (contains)'
 
     # partial if identified pattern captures a
     # least <partial_perc> of annotation
@@ -74,7 +70,7 @@ def is_match_v2(sp, lp, sa, ea, tol=0.1, partial_perc=0.3):
 def evaluate_annotations(annotations, starts_sec_exc, lengths_sec_exc, tol, partial_perc=0.3):
 
     # for below
-    hierarchy = ['full match (exact)', 'full match (contains)', 'partial match']
+    hierarchy = ['full match (exact)', 'partial match']
 
     annotations = annotations.copy()
     results_dict = {}
@@ -326,4 +322,4 @@ def evaluate_quick(annotations_filt, starts_sec_exc, lengths_sec_exc, eval_tol, 
     print(f'Recall (Motif): {round(recall_motif,2)}')
     print(f'Recall (Phrase): {round(recall_phrase,2)}')
     
-    return annotations_tagged
+    return annotations_tagged, recall_all, precision_all, recall_motif, recall_phrase
