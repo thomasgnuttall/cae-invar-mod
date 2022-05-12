@@ -9,12 +9,12 @@ from exploration.sequence import (
 from exploration.evaluation import get_coverage
 
 def run_pipeline(X, 
-    conv_filter, bin_thresh, gauss_sigma, cont_thresh, etc_kernel_size, binop_dim, perc_tail, bin_thresh_segment
+    conv_filter, bin_thresh, gauss_sigma, cont_thresh, etc_kernel_size, binop_dim, perc_tail, bin_thresh_segment,
     min_diff_trav_seq, silence_mask, cqt_window, sr, timestep, min_length_cqt, match_tol, extend_tol, dupl_perc_overlap, 
     n_dtw, thresh_dtw, thresh_cos, min_pattern_length_seconds, min_in_group):
 
     print('Convolving similarity matrix')
-    X_conv = convolve_array_tile(X_samp, cfilter=conv_filter)
+    X_conv = convolve_array_tile(X, cfilter=conv_filter)
 
     print('Binarizing convolved array')
     X_bin = binarize(X_conv, bin_thresh)
@@ -46,7 +46,6 @@ def run_pipeline(X,
 
     ## Join segments that are sufficiently close
     print('Extracting segments using flood fill and centroid')
-
     all_segments = extract_segments_new(X_binop)
 
     print('Extending Segments')

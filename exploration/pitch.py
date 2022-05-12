@@ -11,6 +11,9 @@ import essentia.standard as estd
 
 from scipy.ndimage import gaussian_filter1d
 
+from exploration.sequence import get_stability_mask, add_center_to_mask
+from exploration.io import get_timeseries, write_timeseries
+
 def pitch_to_cents(p, tonic):
     """
     Convert pitch value, <p> to cents above <tonic>.
@@ -123,3 +126,17 @@ def extract_pitch_track(audio_path, frameSize, hopSize, gap_interp, smooth, sr):
         pitch = raw_pitch[:]
 
     return pitch, raw_pitch, timestep, time
+
+
+def silence_stability_from_file(inpath, outpath, min_stability_length_secs=1, stab_hop_secs=0.2, freq_var_thresh_stab=10, gap_interp=0.250):
+
+    pitch, time, timestep = get_timeseries(inpath)
+    pitch_interp = interpolate_below_length(pitch, 0, (gap_interp/timestep))
+
+    print('Computing stability/silence mask')
+    stable_mask = get_stability_mask(pitch_interp, min_stability_length_secs, stab_hop_secs, freq_var_thresh_stab, timestep)
+    silence_mask = (pitch_interp == 0).astype(int)
+    silence_mask = add_center_to_mask(silence_mask)
+    silence_and_stable_mask = np.array([int(any([i,j])) for i,j in zip(silence_mask, stable_mask)])
+    write_timeseries([time, silence_and_stable_mask], outpath)
+

@@ -134,6 +134,9 @@ def extract_segments_new(X):
         brq_x = [i[0] for i in brq]
         brq_y = [i[1] for i in brq]
 
+        if len(tlq) == 0 or len(brq) == 0:
+            continue
+            
         # Compute the centroid for each of the two quarters
         tlq_centroid = (int(sum(tlq_x) / len(tlq)), int(sum(tlq_y) / len(tlq)))
         brq_centroid = (int(sum(brq_x) / len(brq)), int(sum(brq_y) / len(brq)))
@@ -619,20 +622,23 @@ def get_longest(x0,x1,y0,y1):
 
 
 def is_good_segment(x0, y0, x1, y1, thresh, silence_and_stable_mask, cqt_window, timestep, sr):
-    x0s = round(x0*cqt_window/(sr*timestep))
-    x1s = round(x1*cqt_window/(sr*timestep))
-    y0s = round(y0*cqt_window/(sr*timestep))
-    y1s = round(y1*cqt_window/(sr*timestep))
+    try:
+        x0s = round(x0*cqt_window/(sr*timestep))
+        x1s = round(x1*cqt_window/(sr*timestep))
+        y0s = round(y0*cqt_window/(sr*timestep))
+        y1s = round(y1*cqt_window/(sr*timestep))
 
-    seq1_stab = silence_and_stable_mask[x0s:x1s]
-    seq2_stab = silence_and_stable_mask[y0s:y1s]
-    
-    prop_stab1 = sum(seq1_stab!=0) / len(seq1_stab)
-    prop_stab2 = sum(seq2_stab!=0) / len(seq2_stab)
+        seq1_stab = silence_and_stable_mask[x0s:x1s]
+        seq2_stab = silence_and_stable_mask[y0s:y1s]
 
-    if not (prop_stab1 > thresh or prop_stab2 > thresh):
-        return True
-    else:
+        prop_stab1 = sum(seq1_stab!=0) / len(seq1_stab)
+        prop_stab2 = sum(seq2_stab!=0) / len(seq2_stab)
+
+        if not (prop_stab1 > thresh or prop_stab2 > thresh):
+            return True
+        else:
+            return False
+    except:
         return False
 
 
@@ -1425,8 +1431,6 @@ def get_segment_grouping(new_segments, matches_dict, silence_and_stable_mask, cq
     all_groups = [[segment_ix_dict[i] for i in ag if i in segment_ix_dict] for ag in all_groups]
     all_groups  = [[((x0,x1),(y0,y1)) for ((x0,y0),(x1,y1)) in ag] for ag in all_groups]
 
-
-
     all_groups  = [sorted([x for y in ag for x in y]) for ag in all_groups]
 
     all_groups = [sorted(ag, key=lambda y:y[0]) for ag in all_groups]
@@ -1451,7 +1455,7 @@ def group_segments(all_segments, min_length_cqt, match_tol, silence_and_stable_m
     return all_groups
 
 
-def extend_groups_to_mask(all_groups, mask, toler=0.25):
+def extend_groups_to_mask(all_groups, mask, cqt_window, sr, timestep, toler=0.25):
     mask_i = list(range(len(mask)))
     new_groups = []
     for group in all_groups:
@@ -1548,9 +1552,9 @@ def group_by_distance(all_groups, pitch, n_dtw, thresh_dtw, thresh_cos, cqt_wind
 
                 seq_len = min([len(seq1), len(seq2)])
                 dtw_val, path = fastdtw.fastdtw(seq1, seq2, radius=round(seq_len*0.5))
-                cos_val = cosine(seq1, seq2)
+                #cos_val = cosine(seq1, seq2)
 
-                if (dtw_val/len(path) < thresh_dtw) and (cos_val < thresh_cos):
+                if (dtw_val/len(path) < thresh_dtw) and True:#(cos_val < thresh_cos):
                     update_dict(group_match_dict, i, j)
                     update_dict(group_match_dict, j, i)
                     break

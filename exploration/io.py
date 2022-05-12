@@ -1,6 +1,7 @@
 import csv
 import json 
 import os
+import pickle
 import yaml
 
 #import essentia
@@ -243,3 +244,54 @@ def load_if_exists(path, dtype=float):
         a = None
     return a
 
+
+def get_timeseries(path):
+    pitch = []
+    time = []
+    with open(path, 'r') as f:
+        for i in f:
+            t, f = i.replace('/n','').split(',')
+            pitch.append(float(f))
+            time.append(float(t))
+    timestep = time[3]-time[2]
+    return np.array(pitch), np.array(time), timestep
+
+
+def write_timeseries(seqs, path):
+    create_if_not_exists(path)
+    with open(path, 'w') as f:
+        for s in zip(*seqs):
+            string = [f'{i}, ' for i in s[:-1]] + [f'{s[-1]}\n']
+            string = ''.join(string)
+            f.write(string)
+
+
+def write_pkl(o, path):
+    create_if_not_exists(path)
+    with open(path, 'wb') as f:
+        pickle.dump(o, f, pickle.HIGHEST_PROTOCOL)
+
+
+def load_pkl(path):
+    file = open(path,'rb')
+    return pickle.load(file)
+
+
+def save_object(obj, filename):
+    import pickle
+    with open(filename, 'wb') as outp:  # Overwrites any existing file.
+        pickle.dump(obj, outp, pickle.HIGHEST_PROTOCOL)
+
+
+def run_or_cache(func, inputs, cache):
+    if os.path.isfile(cache):
+        print(f'loading from cache, {cache}')
+        file = open(cache,'rb')
+        results = pickle.load(file)
+    else:
+        print(f'running function {func.__name__}')
+        results = func(*inputs)
+        create_if_not_exists(cache)
+        save_object(results, cache)
+
+    return results
